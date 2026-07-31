@@ -335,6 +335,13 @@ export function ReactionCalculator({
             1 µL cDNA, and 10% overage. This is not a brand-specific recipe.
           </p>
           <p>
+            [常规要求 / Routine requirements] 请另行预留 NTC、no-RT
+            等控制孔，并核查单一熔解峰、扩增效率及内参稳定性；控制孔未自动计入当前用量。 /
+            Reserve NTC and no-RT controls separately, and verify a
+            single-product melt profile, assay efficiency, and reference-gene
+            stability. Control wells are not included automatically.
+          </p>
+          <p>
             [来源核查 / Current references]{" "}
             <a
               href="https://www.thermofisher.com/TFS-Assets/LSG/manuals/MAN0013511_PowerUp_mastermix_UG.pdf"

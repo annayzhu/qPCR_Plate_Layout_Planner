@@ -559,7 +559,7 @@ export async function buildPlateWorkbook(
     ["生成时间 / Generated at", context.generatedAt],
     [
       "方法边界 / Method boundary",
-      "本布局不自动添加 NTC、no-RT 或阳性模板控制，请按本地 SOP 核对。 / Controls are not added automatically; check the local SOP.",
+      "本布局不自动添加 NTC、no-RT 或阳性模板控制；请另行核查熔解曲线、扩增效率和内参稳定性，并遵循本地 SOP。 / Controls are not added automatically; verify melt profiles, assay efficiency, reference stability, and the local SOP.",
     ],
   ];
   const summarySheet = XLSX.utils.aoa_to_sheet(summaryRows);
