@@ -1,0 +1,284 @@
+import { execFileSync } from "node:child_process";
+import {
+  readFile,
+  writeFile,
+  mkdir,
+  mkdtemp,
+  readdir,
+  rm,
+} from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import * as esbuild from "esbuild";
+import JSZip from "jszip";
+
+const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
+const projectDirectory = path.resolve(scriptDirectory, "..");
+const outputRoot = path.join(projectDirectory, "outputs", "portable");
+const folderName = "RT-qPCR_Plate_Planner_Portable";
+const outputDirectory = path.join(outputRoot, folderName);
+const htmlFilename = "Open_RT-qPCR_Plate_Planner.html";
+const readmeFilename = "README_CN_EN.txt";
+const versionFilename = "VERSION.txt";
+const licenseFilename = "THIRD_PARTY_LICENSES.txt";
+const temporaryDirectory = await mkdtemp(
+  path.join(os.tmpdir(), "qpcr-portable-"),
+);
+const javascriptPath = path.join(temporaryDirectory, "portable-app.js");
+
+function dateStamp(date = new Date()) {
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getDate()).padStart(2, "0"),
+  ].join("");
+}
+
+function escapeInlineScript(source) {
+  return source.replaceAll(/<\/script/gi, "<\\/script");
+}
+
+function escapeInlineStyle(source) {
+  return source.replaceAll(/<\/style/gi, "<\\/style");
+}
+
+function currentCommit() {
+  try {
+    return execFileSync("git", ["rev-parse", "--short", "HEAD"], {
+      cwd: projectDirectory,
+      encoding: "utf8",
+    }).trim();
+  } catch {
+    return "uncommitted";
+  }
+}
+
+function packageRootFromMetafileInput(inputPath) {
+  const parts = inputPath.replaceAll("\\", "/").split("/");
+  let nodeModulesIndex = -1;
+  for (let index = 0; index < parts.length; index += 1) {
+    if (parts[index] === "node_modules") nodeModulesIndex = index;
+  }
+  if (nodeModulesIndex < 0 || !parts[nodeModulesIndex + 1]) return null;
+  const packageEnd =
+    parts[nodeModulesIndex + 1].startsWith("@")
+      ? nodeModulesIndex + 3
+      : nodeModulesIndex + 2;
+  return path.resolve(
+    projectDirectory,
+    parts.slice(0, packageEnd).join("/"),
+  );
+}
+
+async function thirdPartyLicenseText(metafile) {
+  const packageRoots = new Set(
+    Object.keys(metafile.inputs)
+      .map(packageRootFromMetafileInput)
+      .filter(Boolean),
+  );
+  const packages = [];
+
+  for (const packageRoot of packageRoots) {
+    const metadata = JSON.parse(
+      await readFile(path.join(packageRoot, "package.json"), "utf8"),
+    );
+    const licenseFiles = (await readdir(packageRoot))
+      .filter((filename) => /^(licen[cs]e|notice)(\..*)?$/iu.test(filename))
+      .sort((left, right) => left.localeCompare(right, "en"));
+    const notices = await Promise.all(
+      licenseFiles.map(async (filename) => ({
+        filename,
+        text: await readFile(path.join(packageRoot, filename), "utf8"),
+      })),
+    );
+    packages.push({
+      name: metadata.name,
+      version: metadata.version,
+      license: metadata.license ?? "Not specified",
+      notices,
+    });
+  }
+
+  packages.sort((left, right) =>
+    `${left.name}@${left.version}`.localeCompare(
+      `${right.name}@${right.version}`,
+      "en",
+    ),
+  );
+
+  return [
+    "RT-qPCR(SYBR Green)板布局规划工具｜第三方软件许可",
+    "RT-qPCR (SYBR Green) Plate Layout Planner | Third-Party Notices",
+    "",
+    "本文件保留离线 HTML 所内嵌第三方组件的版权与许可声明。",
+    "This file preserves copyright and license notices for components bundled into the offline HTML.",
+    "",
+    ...packages.flatMap((packageInfo) => [
+      "=".repeat(78),
+      `${packageInfo.name}@${packageInfo.version}`,
+      `Declared license: ${packageInfo.license}`,
+      "=".repeat(78),
+      "",
+      ...(packageInfo.notices.length > 0
+        ? packageInfo.notices.flatMap((notice) => [
+            `--- ${notice.filename} ---`,
+            notice.text.trim(),
+            "",
+          ])
+        : [
+            "No standalone LICENSE or NOTICE file was found in the installed package.",
+            "",
+          ]),
+    ]),
+  ].join("\n");
+}
+
+function withUtf8Bom(text) {
+  return `\uFEFF${text}`;
+}
+
+try {
+  const buildResult = await esbuild.build({
+    entryPoints: [path.join(projectDirectory, "portable", "entry.tsx")],
+    outfile: javascriptPath,
+    bundle: true,
+    splitting: false,
+    format: "iife",
+    platform: "browser",
+    target: ["chrome100", "edge100", "firefox100", "safari15.4"],
+    jsx: "automatic",
+    jsxImportSource: "react",
+    minify: true,
+    sourcemap: false,
+    legalComments: "none",
+    metafile: true,
+    define: {
+      "process.env.NODE_ENV": '"production"',
+    },
+    plugins: [
+      {
+        name: "project-alias",
+        setup(build) {
+          build.onResolve({ filter: /^@\// }, (args) =>
+            build.resolve(`./${args.path.slice(2)}`, {
+              resolveDir: projectDirectory,
+              kind: args.kind,
+            }),
+          );
+        },
+      },
+    ],
+  });
+
+  const [javascript, rawCss] = await Promise.all([
+    readFile(javascriptPath, "utf8"),
+    readFile(path.join(projectDirectory, "app", "globals.css"), "utf8"),
+  ]);
+  const css = rawCss.replace(/^@import\s+["']tailwindcss["'];\s*/u, "");
+  const thirdPartyLicenses = await thirdPartyLicenseText(
+    buildResult.metafile,
+  );
+  const buildDate = dateStamp();
+  const commit = currentCommit();
+  const html = `<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>RT-qPCR(SYBR Green)板布局规划工具</title>
+    <style>${escapeInlineStyle(css)}</style>
+  </head>
+  <body>
+    <noscript>请启用浏览器 JavaScript 后使用本工具。</noscript>
+    <div id="qpcr-planner-root"></div>
+    <script>${escapeInlineScript(javascript)}</script>
+  </body>
+</html>
+`;
+  const readme = `RT-qPCR(SYBR Green)板布局规划工具｜离线便携版
+RT-qPCR (SYBR Green) Plate Layout Planner | Offline Portable Edition
+
+使用方法 / How to use
+1. 请保留并拷贝解压后的整个文件夹。Keep the entire extracted folder together.
+2. 双击“${htmlFilename}”即可打开。
+   Double-click "${htmlFilename}" to open the app.
+3. 推荐使用最新版 Chrome、Edge 或 Safari。无需安装 Node、Python，也无需启动服务器。
+   Use a current Chrome, Edge, or Safari. Node, Python, a server, and an internet connection are not required.
+4. 单板 Excel 和批量 ZIP 会保存到浏览器的默认下载目录。
+   Excel workbooks and batch ZIP files are saved to the browser's Downloads folder.
+
+重要说明 / Notes
+- 核心排板、反应用量计算和 Excel 导出均可离线使用。
+  Layout planning, reaction calculations, and Excel export work offline.
+- Thermo Fisher 与 Bio-Rad 的来源链接需要联网时才能打开，不影响其他功能。
+  The Thermo Fisher and Bio-Rad source links require internet access; all other features remain available offline.
+- “保存”使用当前电脑、当前浏览器的本地存储。更换浏览器、移动或重命名 HTML 后，原先保存的草稿可能不会自动出现。
+  Save uses browser-local storage on the current computer. Drafts may not follow the file if you rename or move it, or switch browsers/computers.
+- 请使用脱敏样本名称；本工具不会主动上传样本名称。
+  Use de-identified sample names. The tool does not actively upload sample names.
+- 仅供科研使用。上机前请按试剂说明书和本地 SOP 人工核对。
+  For research use only. Verify the final setup against the reagent instructions and local SOP before running the plate.
+`;
+  const version = `构建日期：${buildDate}
+源码版本：${commit}
+格式：单文件离线 HTML（CSS、JavaScript 及 Excel 导出组件均已内嵌）
+`;
+
+  await rm(outputDirectory, { recursive: true, force: true });
+  await mkdir(outputDirectory, { recursive: true });
+  await Promise.all([
+    writeFile(path.join(outputDirectory, htmlFilename), html, "utf8"),
+    writeFile(
+      path.join(outputDirectory, readmeFilename),
+      withUtf8Bom(readme),
+      "utf8",
+    ),
+    writeFile(
+      path.join(outputDirectory, versionFilename),
+      withUtf8Bom(version),
+      "utf8",
+    ),
+    writeFile(
+      path.join(outputDirectory, licenseFilename),
+      withUtf8Bom(thirdPartyLicenses),
+      "utf8",
+    ),
+  ]);
+
+  const zip = new JSZip();
+  const zipFolder = zip.folder(folderName);
+  zipFolder.file(htmlFilename, html);
+  zipFolder.file(readmeFilename, withUtf8Bom(readme));
+  zipFolder.file(versionFilename, withUtf8Bom(version));
+  zipFolder.file(
+    licenseFilename,
+    withUtf8Bom(thirdPartyLicenses),
+  );
+  const zipBuffer = await zip.generateAsync({
+    type: "nodebuffer",
+    compression: "DEFLATE",
+    compressionOptions: { level: 9 },
+  });
+  const zipPath = path.join(
+    outputRoot,
+    `${folderName}_${buildDate}.zip`,
+  );
+  await writeFile(zipPath, zipBuffer);
+
+  console.log(
+    JSON.stringify(
+      {
+        folder: outputDirectory,
+        html: path.join(outputDirectory, htmlFilename),
+        zip: zipPath,
+        htmlBytes: Buffer.byteLength(html),
+      },
+      null,
+      2,
+    ),
+  );
+} finally {
+  await rm(temporaryDirectory, { recursive: true, force: true });
+}
