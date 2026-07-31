@@ -1393,26 +1393,6 @@ export function QpcrPlanner() {
                     ? tr("本地就绪", "Ready")
                     : tr("载入中", "Loading")}
           </span>
-          <button
-            className="icon-button desktop-only"
-            type="button"
-            onClick={undoLayout}
-            disabled={undoStack.length === 0}
-            aria-label={tr("撤销手动编辑", "Undo manual edit")}
-            title={tr("撤销（⌘/Ctrl + Z）", "Undo (⌘/Ctrl + Z)")}
-          >
-            <Undo2 size={16} />
-          </button>
-          <button
-            className="icon-button desktop-only"
-            type="button"
-            onClick={redoLayout}
-            disabled={redoStack.length === 0}
-            aria-label={tr("恢复手动编辑", "Redo manual edit")}
-            title={tr("恢复（⇧ + ⌘/Ctrl + Z）", "Redo (⇧ + ⌘/Ctrl + Z)")}
-          >
-            <Redo2 size={16} />
-          </button>
           <button className="button" type="button" onClick={savePlanner}>
             <Save size={15} />
             <span>{tr("保存", "Save")}</span>
@@ -2266,26 +2246,6 @@ export function QpcrPlanner() {
                     </div>
                     <div className="plate-actions">
                       <button
-                        className="icon-button"
-                        type="button"
-                        onClick={undoLayout}
-                        disabled={undoStack.length === 0}
-                        title={tr("撤销", "Undo")}
-                        aria-label={tr("撤销", "Undo")}
-                      >
-                        <Undo2 size={15} />
-                      </button>
-                      <button
-                        className="icon-button"
-                        type="button"
-                        onClick={redoLayout}
-                        disabled={redoStack.length === 0}
-                        title={tr("恢复", "Redo")}
-                        aria-label={tr("恢复", "Redo")}
-                      >
-                        <Redo2 size={15} />
-                      </button>
-                      <button
                         className="button button-quiet"
                         type="button"
                         onClick={restoreActivePlate}
@@ -2388,6 +2348,32 @@ export function QpcrPlanner() {
                           )}
                     </span>
                     <div className="selection-actions">
+                      <button
+                        className="button button-quiet"
+                        type="button"
+                        onClick={undoLayout}
+                        disabled={undoStack.length === 0}
+                        title={tr(
+                          "撤回手动编辑（⌘/Ctrl + Z）",
+                          "Undo manual edit (⌘/Ctrl + Z)",
+                        )}
+                      >
+                        <Undo2 size={13} />
+                        {tr("撤回", "Undo")}
+                      </button>
+                      <button
+                        className="button button-quiet"
+                        type="button"
+                        onClick={redoLayout}
+                        disabled={redoStack.length === 0}
+                        title={tr(
+                          "重做手动编辑（⇧ + ⌘/Ctrl + Z）",
+                          "Redo manual edit (⇧ + ⌘/Ctrl + Z)",
+                        )}
+                      >
+                        <Redo2 size={13} />
+                        {tr("重做", "Redo")}
+                      </button>
                       <button
                         className="button button-quiet"
                         type="button"

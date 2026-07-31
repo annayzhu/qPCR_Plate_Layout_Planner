@@ -1509,14 +1509,19 @@ select:focus-visible,
 
 .selection-actions {
   display: flex;
+  max-width: 100%;
   align-items: center;
+  overflow-x: auto;
   gap: 4px;
+  scrollbar-width: thin;
 }
 
 .selection-actions .button,
 .selection-actions .icon-button {
   min-height: 32px;
+  flex: 0 0 auto;
   font-size: 10px;
+  white-space: nowrap;
 }
 
 .selection-actions .icon-button {
@@ -1914,8 +1919,7 @@ select:focus-visible,
     padding: 10px 14px;
   }
 
-  .topbar .save-status,
-  .topbar .desktop-only {
+  .topbar .save-status {
     display: none;
   }
 
