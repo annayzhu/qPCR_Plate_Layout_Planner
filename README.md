@@ -61,4 +61,4 @@ npm run build
 node --test tests/rendered-html.test.mjs
 ```
 
-实验方案保存在当前浏览器的 `localStorage`，样本名称不会由应用主动上传。
+只有点击“保存”后，实验方案才会写入当前浏览器的 `localStorage`，并在下次打开时自动恢复。“重置工具”会清除本机保存记录并恢复初始状态；样本名称不会由应用主动上传。

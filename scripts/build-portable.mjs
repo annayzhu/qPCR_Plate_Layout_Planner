@@ -220,6 +220,8 @@ RT-qPCR (SYBR Green) Plate Layout Planner | Offline Portable Edition
   The Thermo Fisher and Bio-Rad source links require internet access; all other features remain available offline.
 - “保存”使用当前电脑、当前浏览器的本地存储。更换浏览器、移动或重命名 HTML 后，原先保存的草稿可能不会自动出现。
   Save uses browser-local storage on the current computer. Drafts may not follow the file if you rename or move it, or switch browsers/computers.
+- 只有点击“保存”后方案才会在下次打开时恢复；“重置工具”会清除本机保存记录并恢复初始状态。
+  A plan is restored on the next visit only after you click Save. Reset tool clears the browser-saved plan and restores the defaults.
 - 请使用脱敏样本名称；本工具不会主动上传样本名称。
   Use de-identified sample names. The tool does not actively upload sample names.
 - 仅供科研使用。上机前请按试剂说明书和本地 SOP 人工核对。

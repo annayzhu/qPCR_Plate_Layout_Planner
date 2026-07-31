@@ -40,6 +40,8 @@ test("server-renders the qPCR plate planner shell", async () => {
   assert.match(html, /按样本排列/);
   assert.match(html, /按基因排列/);
   assert.match(html, /生成布局/);
+  assert.match(html, /重置工具/);
+  assert.match(html, /导入 0 个样本名称/);
   assert.doesNotMatch(html, /Local-first/i);
   assert.doesNotMatch(html, /codex-preview/i);
   assert.doesNotMatch(html, /react-loading-skeleton/i);

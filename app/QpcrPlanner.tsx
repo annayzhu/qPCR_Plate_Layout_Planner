@@ -418,6 +418,10 @@ export function QpcrPlanner() {
     () => samples.map((sample) => sample.name),
     [samples],
   );
+  const samplePasteNames = useMemo(
+    () => parseExcelNames(samplePaste),
+    [samplePaste],
+  );
   const blankSampleNames = useMemo(
     () =>
       samples
@@ -1056,6 +1060,67 @@ export function QpcrPlanner() {
     }
   }
 
+  function resetPlanner() {
+    if (
+      !window.confirm(
+        tr(
+          "这会清除当前页面内容和本机浏览器中保存的样本、基因、板布局及反应体系，且无法撤销。是否继续？",
+          "This will permanently clear the current page and the samples, assays, plate layouts, and reaction setup saved in this browser. Continue?",
+        ),
+      )
+    ) {
+      return;
+    }
+
+    try {
+      window.localStorage.removeItem(STORAGE_KEY);
+    } catch {
+      setToast({
+        tone: "error",
+        message: tr(
+          "无法清除本机保存记录；当前内容未重置。请检查浏览器是否允许本地存储。",
+          "The browser-saved plan could not be cleared, so the current page was not reset. Check whether browser storage is allowed.",
+        ),
+      });
+      return;
+    }
+
+    setPlateType(96);
+    setSamples([]);
+    setGenes([]);
+    setReplicates(3);
+    setLayoutPreset("sample-major");
+    setLoadingPattern("sequential");
+    setSampleInput("");
+    setGeneInput("");
+    setSamplePaste("");
+    setGenePaste("");
+    setLayout(null);
+    setAutomaticLayout(null);
+    setLayoutSignature("");
+    setGeneratedAt("");
+    setActivePlateIndex(0);
+    setConfirmed({});
+    setUndoStack([]);
+    setRedoStack([]);
+    setEditor(null);
+    setSelectedWellIds([]);
+    setSelectionAnchorId(null);
+    setMoveMode(false);
+    setEditingPlateName(false);
+    setPlateNameDraft("");
+    setReactionSystem({ ...DEFAULT_REACTION_SYSTEM });
+    setSavedAt("");
+    setDirty(false);
+    setToast({
+      tone: "success",
+      message: tr(
+        "本机保存记录已清除，工具已恢复初始状态。",
+        "The browser-saved plan was cleared and the tool was reset.",
+      ),
+    });
+  }
+
   function openEditorForSelection(
     plateIndex: number,
     plate: PlannerPlate,
@@ -1542,6 +1607,23 @@ export function QpcrPlanner() {
                     ? tr("本地就绪", "Ready")
                     : tr("载入中", "Loading")}
           </span>
+          <button
+            className="button button-clear"
+            type="button"
+            onClick={resetPlanner}
+            disabled={!hydrated}
+            title={tr(
+              "清除本机保存记录并恢复初始状态",
+              "Clear the browser-saved plan and restore defaults",
+            )}
+            aria-label={tr(
+              "重置工具并清除本机保存记录",
+              "Reset the tool and clear the browser-saved plan",
+            )}
+          >
+            <RotateCcw size={15} />
+            <span>{tr("重置工具", "Reset tool")}</span>
+          </button>
           <button className="button" type="button" onClick={savePlanner}>
             <Save size={15} />
             <span>{tr("保存", "Save")}</span>
@@ -1701,15 +1783,18 @@ export function QpcrPlanner() {
                   <button
                     className="button button-soft"
                     type="button"
-                    disabled={parseExcelNames(samplePaste).length === 0}
+                    disabled={samplePasteNames.length === 0}
                     onClick={() => {
-                      addSamples(parseExcelNames(samplePaste));
+                      addSamples(samplePasteNames);
                       setSamplePaste("");
                     }}
                   >
-                    {tr("导入", "Import")}{" "}
-                    {parseExcelNames(samplePaste).length || ""}{" "}
-                    {tr("个名称", "names")}
+                    {tr(
+                      `导入 ${samplePasteNames.length} 个样本名称`,
+                      `Import ${samplePasteNames.length} sample ${
+                        samplePasteNames.length === 1 ? "name" : "names"
+                      }`,
+                    )}
                   </button>
                 </div>
               </details>
