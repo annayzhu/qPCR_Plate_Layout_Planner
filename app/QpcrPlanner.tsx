@@ -56,6 +56,7 @@ import {
   refreshPlanDerivedData,
   validateLayout,
   type GeneType,
+  type LayoutPreset,
   type PlanInput,
   type PlannerPlate,
   type PlannerWell,
@@ -95,6 +96,22 @@ interface ToastState {
 }
 
 interface StoredPlannerState {
+  version: 3;
+  plateType: PlateType;
+  samples: SampleEntry[];
+  genes: GeneEntry[];
+  replicates: number;
+  layoutPreset: LayoutPreset;
+  layout: PlanResult | null;
+  automaticLayout: PlanResult | null;
+  layoutSignature: string;
+  generatedAt: string;
+  confirmed: Record<string, boolean>;
+  reactionSystem?: ReactionSystemInput;
+  language: Language;
+}
+
+interface StoredPlannerStateV2 {
   version: 2;
   plateType: PlateType;
   samples: SampleEntry[];
@@ -109,7 +126,7 @@ interface StoredPlannerState {
   language: Language;
 }
 
-interface LegacyStoredPlannerState {
+interface StoredPlannerStateV1 {
   version: 1;
   plateType: PlateType;
   samples: string[];
@@ -188,6 +205,22 @@ function experimentSignature(
   samples: SampleEntry[],
   genes: GeneEntry[],
   replicates: number,
+  layoutPreset: LayoutPreset,
+) {
+  return JSON.stringify({
+    plateType,
+    samples: samples.map(({ name }) => name),
+    genes: genes.map(({ name, role }) => ({ name, role })),
+    replicates,
+    layoutPreset,
+  });
+}
+
+function legacyExperimentSignature(
+  plateType: PlateType,
+  samples: SampleEntry[],
+  genes: GeneEntry[],
+  replicates: number,
 ) {
   return JSON.stringify({
     plateType,
@@ -197,11 +230,41 @@ function experimentSignature(
   });
 }
 
+function inferredLayoutPreset(result: PlanResult | null): LayoutPreset {
+  return result?.strategy === "gene-major" ? "gene-major" : "sample-major";
+}
+
+function migrateLayoutSignature(
+  storedSignature: string,
+  plateType: PlateType,
+  samples: SampleEntry[],
+  genes: GeneEntry[],
+  replicates: number,
+  layoutPreset: LayoutPreset,
+) {
+  if (!storedSignature) return "";
+  const legacySignature = legacyExperimentSignature(
+    plateType,
+    samples,
+    genes,
+    replicates,
+  );
+  return storedSignature === legacySignature
+    ? experimentSignature(
+        plateType,
+        samples,
+        genes,
+        replicates,
+        layoutPreset,
+      )
+    : storedSignature;
+}
+
 function strategyLabel(strategy: PlanResult["strategy"]) {
   if (strategy === "sample-major")
-    return "按样本分块 / Sample-major";
+    return "按样本排列 / By sample";
   if (strategy === "gene-major")
-    return "按基因分块 / Assay-major";
+    return "按基因排列 / By assay";
   return "混合分块 / Hybrid";
 }
 
@@ -254,6 +317,8 @@ export function QpcrPlanner() {
   const [genes, setGenes] = useState<GeneEntry[]>([]);
   const [language, setLanguage] = useState<Language>("zh");
   const [replicates, setReplicates] = useState(3);
+  const [layoutPreset, setLayoutPreset] =
+    useState<LayoutPreset>("sample-major");
   const [sampleInput, setSampleInput] = useState("");
   const [geneInput, setGeneInput] = useState("");
   const [samplePaste, setSamplePaste] = useState("");
@@ -334,8 +399,15 @@ export function QpcrPlanner() {
   );
 
   const currentSignature = useMemo(
-    () => experimentSignature(plateType, samples, genes, replicates),
-    [genes, plateType, replicates, samples],
+    () =>
+      experimentSignature(
+        plateType,
+        samples,
+        genes,
+        replicates,
+        layoutPreset,
+      ),
+    [genes, layoutPreset, plateType, replicates, samples],
   );
   const settingsStale = Boolean(layout && layoutSignature !== currentSignature);
   const reactionWells = sampleNames.length * genes.length * replicates;
@@ -428,15 +500,28 @@ export function QpcrPlanner() {
         if (saved) {
           const parsed = JSON.parse(saved) as
             | StoredPlannerState
-            | LegacyStoredPlannerState;
+            | StoredPlannerStateV2
+            | StoredPlannerStateV1;
           if (parsed.version === 1) {
+            const migratedSamples = migrateLegacySamples(parsed.samples);
+            const migratedPreset = inferredLayoutPreset(parsed.layout);
             setPlateType(parsed.plateType);
-            setSamples(migrateLegacySamples(parsed.samples));
+            setSamples(migratedSamples);
             setGenes(parsed.genes);
             setReplicates(parsed.replicates);
+            setLayoutPreset(migratedPreset);
             setLayout(withPlateNames(parsed.layout));
             setAutomaticLayout(withPlateNames(parsed.automaticLayout));
-            setLayoutSignature(parsed.layoutSignature);
+            setLayoutSignature(
+              migrateLayoutSignature(
+                parsed.layoutSignature,
+                parsed.plateType,
+                migratedSamples,
+                parsed.genes,
+                parsed.replicates,
+                migratedPreset,
+              ),
+            );
             setGeneratedAt(parsed.generatedAt);
             setConfirmed(parsed.confirmed);
             setReactionSystem(
@@ -444,10 +529,37 @@ export function QpcrPlanner() {
             );
             setSavedAt("restored");
           } else if (parsed.version === 2) {
+            const migratedPreset = inferredLayoutPreset(parsed.layout);
             setPlateType(parsed.plateType);
             setSamples(parsed.samples);
             setGenes(parsed.genes);
             setReplicates(parsed.replicates);
+            setLayoutPreset(migratedPreset);
+            setLayout(withPlateNames(parsed.layout));
+            setAutomaticLayout(withPlateNames(parsed.automaticLayout));
+            setLayoutSignature(
+              migrateLayoutSignature(
+                parsed.layoutSignature,
+                parsed.plateType,
+                parsed.samples,
+                parsed.genes,
+                parsed.replicates,
+                migratedPreset,
+              ),
+            );
+            setGeneratedAt(parsed.generatedAt);
+            setConfirmed(parsed.confirmed);
+            setReactionSystem(
+              parsed.reactionSystem ?? DEFAULT_REACTION_SYSTEM,
+            );
+            setLanguage(parsed.language ?? "zh");
+            setSavedAt("restored");
+          } else if (parsed.version === 3) {
+            setPlateType(parsed.plateType);
+            setSamples(parsed.samples);
+            setGenes(parsed.genes);
+            setReplicates(parsed.replicates);
+            setLayoutPreset(parsed.layoutPreset);
             setLayout(withPlateNames(parsed.layout));
             setAutomaticLayout(withPlateNames(parsed.automaticLayout));
             setLayoutSignature(parsed.layoutSignature);
@@ -620,6 +732,7 @@ export function QpcrPlanner() {
     setSamples(exampleSamples);
     setGenes(exampleGenes);
     setReplicates(3);
+    setLayoutPreset("sample-major");
     setLayout(null);
     setAutomaticLayout(null);
     setConfirmed({});
@@ -656,7 +769,9 @@ export function QpcrPlanner() {
       return;
     }
     try {
-      const next = planPlateLayout(planInput);
+      const next = planPlateLayout(planInput, {
+        strategy: layoutPreset,
+      });
       const now = new Date().toLocaleString("zh-CN", { hour12: false });
       setLayout(next);
       setAutomaticLayout(clonePlan(next));
@@ -672,10 +787,16 @@ export function QpcrPlanner() {
       markChanged();
       setToast({
         tone: "success",
-        message: tr(
-          `已生成 ${next.plates.length} 块 ${plateType} 孔板；目的基因延续到下一板时，已重新安排该样本的全部内参。`,
-          `Generated ${next.plates.length} ${plateType}-well plate(s); all references are rerun whenever a sample's targets continue onto another plate.`,
-        ),
+        message:
+          layoutPreset === "gene-major"
+            ? tr(
+                `已按基因排列生成 ${next.plates.length} 块 ${plateType} 孔板；每个基因内保持样本输入顺序。`,
+                `Generated ${next.plates.length} ${plateType}-well plate(s) by assay; sample input order is preserved within every assay.`,
+              )
+            : tr(
+                `已按样本排列生成 ${next.plates.length} 块 ${plateType} 孔板；目的基因跨板时会重新安排该样本的全部内参。`,
+                `Generated ${next.plates.length} ${plateType}-well plate(s) by sample; all references are rerun whenever a sample's targets continue onto another plate.`,
+              ),
       });
     } catch (error) {
       setToast({
@@ -747,11 +868,12 @@ export function QpcrPlanner() {
 
   function savePlanner() {
     const payload: StoredPlannerState = {
-      version: 2,
+      version: 3,
       plateType,
       samples,
       genes,
       replicates,
+      layoutPreset,
       layout,
       automaticLayout,
       layoutSignature,
@@ -1758,6 +1880,59 @@ export function QpcrPlanner() {
                 )}
               </span>
             </div>
+            <div className="layout-preset">
+              <div className="layout-preset-heading">
+                <span className="field-label">
+                  {tr("排布方式", "Layout mode")}
+                </span>
+                <span className="layout-preset-direction">
+                  {tr("纵向优先", "Top-to-bottom first")}
+                </span>
+              </div>
+              <div
+                className="segmented layout-preset-toggle"
+                role="group"
+                aria-label={tr("选择排布方式", "Choose layout mode")}
+              >
+                <button
+                  className={
+                    layoutPreset === "sample-major" ? "active" : ""
+                  }
+                  type="button"
+                  aria-pressed={layoutPreset === "sample-major"}
+                  onClick={() => {
+                    setLayoutPreset("sample-major");
+                    markChanged();
+                  }}
+                >
+                  {tr("按样本排列", "By sample")}
+                </button>
+                <button
+                  className={
+                    layoutPreset === "gene-major" ? "active" : ""
+                  }
+                  type="button"
+                  aria-pressed={layoutPreset === "gene-major"}
+                  onClick={() => {
+                    setLayoutPreset("gene-major");
+                    markChanged();
+                  }}
+                >
+                  {tr("按基因排列", "By assay")}
+                </button>
+              </div>
+              <p className="microcopy layout-preset-help">
+                {layoutPreset === "sample-major"
+                  ? tr(
+                      "同一样本的全部基因优先相邻；检测块从上到下，再从左到右。",
+                      "Keep all assays for one sample together; fill blocks top-to-bottom, then left-to-right.",
+                    )
+                  : tr(
+                      "同一基因的全部样本优先相邻；样本按输入顺序从上到下，再从左到右。",
+                      "Keep all samples for one assay together; follow sample order top-to-bottom, then left-to-right.",
+                    )}
+              </p>
+            </div>
             <div className="setup-summary">
               <strong>
                 {tr(
@@ -1789,7 +1964,9 @@ export function QpcrPlanner() {
               disabled={inputIssues.length > 0}
             >
               <Sparkles size={16} />
-              {tr("生成推荐布局", "Generate layout")}
+              {layout
+                ? tr("重新生成布局", "Regenerate layout")
+                : tr("生成布局", "Generate layout")}
             </button>
           </section>
         </aside>
@@ -1813,10 +1990,15 @@ export function QpcrPlanner() {
                     )}
               </h1>
               <p className="hero-copy">
-                {tr(
-                  "按样本顺序从上到下、从左到右排布；复孔同行横向连续。某样本的目的基因若延续到下一板，该板会重新安排该样本的全部内参。",
-                  "Arrange samples top-to-bottom, then left-to-right; keep replicates contiguous within a row. If a sample continues onto another plate, all of its references are rerun on that plate.",
-                )}
+                {(layout?.strategy ?? layoutPreset) === "gene-major"
+                  ? tr(
+                      "按基因排列：同一基因下的样本按输入顺序从上到下、再从左到右；复孔同行横向连续。样本目的基因跨板时，新板会重新安排该样本的全部内参。",
+                      "By assay: samples follow input order top-to-bottom, then left-to-right; replicates stay contiguous within a row. When a sample continues onto another plate, all references are rerun there.",
+                    )
+                  : tr(
+                      "按样本排列：同一样本的全部基因优先成组，从上到下、再从左到右；复孔同行横向连续。样本目的基因跨板时，新板会重新安排该样本的全部内参。",
+                      "By sample: all assays for one sample stay grouped top-to-bottom, then left-to-right; replicates remain contiguous within a row. When a sample continues onto another plate, all references are rerun there.",
+                    )}
               </p>
             </div>
             <div
@@ -1875,7 +2057,7 @@ export function QpcrPlanner() {
               </div>
               <div className="metric">
                 <span className="metric-label">
-                  {tr("推荐策略", "Strategy")}
+                  {tr("排布方式", "Layout mode")}
                 </span>
                 <strong className="metric-value" style={{ fontSize: 17 }}>
                   {layout
@@ -1897,10 +2079,15 @@ export function QpcrPlanner() {
               </div>
               {layout && (
                 <p className="rationale">
-                  {tr(
-                    "自动布局优先减少板数，并按样本顺序纵向填充检测块；空余孔位会保留。",
-                    "The automatic plan minimizes plate count, fills assay blocks vertically in sample order, and leaves any unused wells empty.",
-                  )}
+                  {layout.strategy === "gene-major"
+                    ? tr(
+                        "先优化板数与跨板内参重做，再按基因分组纵向填充；空余孔位保留。",
+                        "Plate count and reference reruns are optimized first, then assay groups fill vertically; unused wells remain empty.",
+                      )
+                    : tr(
+                        "先优化板数与跨板内参重做，再按样本分组纵向填充；空余孔位保留。",
+                        "Plate count and reference reruns are optimized first, then sample groups fill vertically; unused wells remain empty.",
+                      )}
                 </p>
               )}
             </div>
@@ -1939,8 +2126,8 @@ export function QpcrPlanner() {
                   <AlertTriangle size={16} />
                   <span>
                     {tr(
-                      "实验设置已在生成后改变。当前布局仍保留用于对照，但需重新生成后才能确认和导出。",
-                      "Experiment settings changed after generation. The current layout is retained for reference; regenerate it before confirmation or export.",
+                      "实验设置或排布方式已在生成后改变。当前布局仍保留用于对照，但需重新生成后才能确认和导出。",
+                      "Experiment settings or layout mode changed after generation. The current layout is retained for reference; regenerate it before confirmation or export.",
                     )}
                   </span>
                 </div>
@@ -2110,7 +2297,7 @@ export function QpcrPlanner() {
                         }
                       >
                         <RotateCcw size={14} />
-                        {tr("恢复自动布局", "Restore")}
+                        {tr("恢复生成布局", "Restore")}
                       </button>
                       <button
                         className={`button ${

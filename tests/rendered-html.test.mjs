@@ -37,7 +37,9 @@ test("server-renders the qPCR plate planner shell", async () => {
   assert.match(html, /添加样本/);
   assert.match(html, /添加检测基因/);
   assert.match(html, /技术复孔/);
-  assert.match(html, /生成推荐布局/);
+  assert.match(html, /按样本排列/);
+  assert.match(html, /按基因排列/);
+  assert.match(html, /生成布局/);
   assert.doesNotMatch(html, /Local-first/i);
   assert.doesNotMatch(html, /codex-preview/i);
   assert.doesNotMatch(html, /react-loading-skeleton/i);

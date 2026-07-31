@@ -2,6 +2,11 @@ export type PlateType = 96 | 384;
 export type GeneType = "target" | "reference";
 export type LayoutSource = "auto" | "manual";
 export type LayoutStrategy = "sample-major" | "gene-major" | "hybrid";
+export type LayoutPreset = Exclude<LayoutStrategy, "hybrid">;
+
+export interface PlanOptions {
+  strategy?: LayoutPreset;
+}
 
 export interface PlanInput {
   plateType: PlateType;
@@ -684,10 +689,8 @@ function geneMajorSequence(
 ) {
   const sequence: AssayBlock[] = [];
   const plateSamples = sampleOrderForPlate(plate, samples);
-  genes.forEach(({ gene, geneType }, geneIndex) => {
-    const orderedSamples =
-      geneIndex % 2 === 0 ? plateSamples : plateSamples.slice().reverse();
-    orderedSamples.forEach((sample) => {
+  genes.forEach(({ gene, geneType }) => {
+    plateSamples.forEach((sample) => {
       if (hasAssay(plate, sample, gene, geneType)) {
         sequence.push({ sample, gene, geneType });
       }
@@ -906,7 +909,10 @@ function materializePlate(
   };
 }
 
-export function planPlateLayout(rawInput: PlanInput): PlanResult {
+export function planPlateLayout(
+  rawInput: PlanInput,
+  options: PlanOptions = {},
+): PlanResult {
   const input = validateInput(rawInput);
   const packings = generatePackings(
     input.samples,
@@ -914,11 +920,9 @@ export function planPlateLayout(rawInput: PlanInput): PlanResult {
     input.blockCapacity,
     input.referenceGenes.length,
   );
-  const strategies: LayoutStrategy[] = [
-    "sample-major",
-    "gene-major",
-    "hybrid",
-  ];
+  const strategies: LayoutStrategy[] = options.strategy
+    ? [options.strategy]
+    : ["sample-major", "gene-major", "hybrid"];
   const candidates = packings.flatMap((packing) =>
     strategies.map((strategy) =>
       buildCandidate(
@@ -959,9 +963,9 @@ export function planPlateLayout(rawInput: PlanInput): PlanResult {
       input.blocksPerRow * input.replicates);
   const strategyName =
     best.strategy === "sample-major"
-      ? "按样本分块 / Sample-major"
+      ? "按样本排列 / By sample"
       : best.strategy === "gene-major"
-        ? "按基因分块 / Assay-major"
+        ? "按基因排列 / By assay"
         : "混合分块 / Hybrid";
   const repeatExplanation =
     best.repeatedReferenceBlocks > 0
@@ -991,7 +995,9 @@ export function planPlateLayout(rawInput: PlanInput): PlanResult {
         best.repeatedReferenceBlocks * input.replicates,
       genePlateOccurrences: best.genePlateOccurrences,
     },
-    reason: `系统在已生成的可行候选中，依次比较板数、跨板内参重做、引物跨板批次和板内切换。推荐${strategyName}：${repeatExplanation} / Feasible candidates are ranked by plate count, reference reruns, assay batches, and within-plate switches.`,
+    reason: options.strategy
+      ? `已按用户选择生成${strategyName}布局；孔板分配仍优先减少板数与跨板内参重做。${repeatExplanation} / The selected ${strategyName} layout was generated while plate allocation continued to minimize plate count and reference reruns.`
+      : `系统在已生成的可行候选中，依次比较板数、跨板内参重做、引物跨板批次和板内切换。推荐${strategyName}：${repeatExplanation} / Feasible candidates are ranked by plate count, reference reruns, assay batches, and within-plate switches.`,
   };
 }
 

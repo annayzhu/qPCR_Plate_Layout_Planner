@@ -15,7 +15,7 @@ test("96-well layout avoids splitting samples when it is unnecessary", () => {
     referenceGenes: ["GAPDH"],
     replicates: 3,
   };
-  const result = planPlateLayout(input);
+  const result = planPlateLayout(input, { strategy: "sample-major" });
   assert.equal(result.plates.length, 2);
   assert.equal(result.metrics.usedWells, 120);
   assert.equal(result.metrics.emptyWells, 72);
@@ -42,7 +42,7 @@ test("replicate groups run left-to-right and never wrap a row", () => {
     referenceGenes: ["R1"],
     replicates: 5,
   };
-  const result = planPlateLayout(input);
+  const result = planPlateLayout(input, { strategy: "sample-major" });
   for (const plate of result.plates) {
     const grouped = new Map<string, typeof plate.wells>();
     for (const well of plate.wells.filter((item) => item.sample && item.gene)) {
@@ -68,7 +68,7 @@ test("places sample-major replicate blocks top-to-bottom before moving right", (
     referenceGenes: ["R1"],
     replicates: 3,
   };
-  const result = planPlateLayout(input);
+  const result = planPlateLayout(input, { strategy: "sample-major" });
   const plate = result.plates[0];
   const occupiedBlocks = plate.wells
     .filter((well) => well.replicateIndex === 1)
@@ -93,6 +93,68 @@ test("places sample-major replicate blocks top-to-bottom before moving right", (
   const refreshed = refreshPlanDerivedData(result, input);
   assert.equal(refreshed.metrics.sampleSwitches, 1);
   assert.equal(refreshed.metrics.primerSwitches, 5);
+});
+
+test("places gene-major blocks by assay while preserving sample order", () => {
+  const input = {
+    plateType: 96 as const,
+    samples: ["S1", "S2"],
+    targetGenes: ["G1", "G2"],
+    referenceGenes: ["R1"],
+    replicates: 3,
+  };
+  const result = planPlateLayout(input, { strategy: "gene-major" });
+  const plate = result.plates[0];
+  const occupiedBlocks = plate.wells
+    .filter((well) => well.replicateIndex === 1)
+    .sort(
+      (left, right) =>
+        Math.floor(left.column / input.replicates) -
+          Math.floor(right.column / input.replicates) ||
+        left.row - right.row,
+    )
+    .map((well) => `${well.wellId}:${well.sample}/${well.gene}`);
+
+  assert.equal(result.strategy, "gene-major");
+  assert.deepEqual(occupiedBlocks, [
+    "A1:S1/R1",
+    "B1:S2/R1",
+    "C1:S1/G1",
+    "D1:S2/G1",
+    "E1:S1/G2",
+    "F1:S2/G2",
+  ]);
+
+  const refreshed = refreshPlanDerivedData(result, input);
+  assert.equal(refreshed.metrics.sampleSwitches, 5);
+  assert.equal(refreshed.metrics.primerSwitches, 2);
+});
+
+test("sample and gene presets keep the same plate and reference requirements", () => {
+  const input = {
+    plateType: 96 as const,
+    samples: Array.from({ length: 10 }, (_, index) => `S${index + 1}`),
+    targetGenes: ["G1", "G2", "G3"],
+    referenceGenes: ["R1"],
+    replicates: 3,
+  };
+  const sampleMajor = planPlateLayout(input, {
+    strategy: "sample-major",
+  });
+  const geneMajor = planPlateLayout(input, {
+    strategy: "gene-major",
+  });
+
+  assert.equal(sampleMajor.strategy, "sample-major");
+  assert.equal(geneMajor.strategy, "gene-major");
+  assert.equal(geneMajor.metrics.plateCount, sampleMajor.metrics.plateCount);
+  assert.equal(geneMajor.metrics.usedWells, sampleMajor.metrics.usedWells);
+  assert.equal(
+    geneMajor.metrics.repeatedReferenceWells,
+    sampleMajor.metrics.repeatedReferenceWells,
+  );
+  assert.equal(validateLayout(sampleMajor, input).valid, true);
+  assert.equal(validateLayout(geneMajor, input).valid, true);
 });
 
 test("fills a 96-well plate exactly for 8 samples, 4 genes, triplicates", () => {
