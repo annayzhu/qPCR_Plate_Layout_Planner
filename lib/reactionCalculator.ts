@@ -20,6 +20,7 @@ export interface GeneReactionRequirement {
   gene: string;
   geneType: GeneType;
   wellCount: number;
+  blankWellCount: number;
   forwardPrimerUl: number;
   reversePrimerUl: number;
   primerPairUl: number;
@@ -32,8 +33,10 @@ export interface GeneReactionRequirement {
 export interface SampleCdnaRequirement {
   sample: string;
   wellCount: number;
+  isBlank: boolean;
   theoreticalCdnaUl: number;
   recommendedCdnaUl: number;
+  replacementWaterUl: number;
 }
 
 export interface ReactionCalculation {
@@ -44,6 +47,7 @@ export interface ReactionCalculation {
   waterPerWellUl: number;
   perWellRows: PerWellReactionRow[];
   totalWells: number;
+  blankWellCount: number;
   geneRequirements: GeneReactionRequirement[];
   sampleRequirements: SampleCdnaRequirement[];
   totals: {
@@ -69,9 +73,15 @@ export function calculateReactionRequirements(
   input: ReactionSystemInput,
   sampleOrder: string[],
   geneOrder: Array<{ name: string; role: GeneType }>,
+  blankSampleNames: string[] = [],
 ): ReactionCalculation {
   const errors: string[] = [];
   const warnings: string[] = [];
+  const normalizedBlankNames = new Set(
+    blankSampleNames.map((sample) => sample.trim().toLocaleLowerCase()),
+  );
+  const isBlankSample = (sample: string) =>
+    normalizedBlankNames.has(sample.trim().toLocaleLowerCase());
   const namedInputs: Array<[string, number]> = [
     ["cDNA", input.cdnaPerWellUl],
     ["引物总体积 / primer-pair volume", input.primerPairPerWellUl],
@@ -141,17 +151,14 @@ export function calculateReactionRequirements(
       "当前反应总体积低于 10 µL；请确认试剂盒和仪器是否验证过该微量体系。 / Total volume is below 10 µL; confirm that the kit and instrument support this scale.",
     );
   }
-  if (input.cdnaPerWellUl === 0) {
+  if (
+    input.cdnaPerWellUl === 0 &&
+    sampleOrder.some((sample) => !isBlankSample(sample))
+  ) {
     warnings.push(
       "当前 cDNA 体积为 0 µL；这只适用于 NTC 等无模板反应，不适用于样本检测孔。 / Zero cDNA is appropriate for no-template controls, not sample assay wells.",
     );
   }
-  warnings.push(
-    "未输入引物储备液浓度，因此只能核算体积，不能判断每条引物的终浓度。 / Primer stock concentration is not entered, so final primer concentration cannot be checked.",
-  );
-  warnings.push(
-    "未输入 cDNA 浓度和逆转录稀释倍数，因此不能换算原始 RNA 或组织样本量。 / Without cDNA concentration and RT dilution, this cannot be converted to original RNA or tissue input.",
-  );
 
   const preparationFactor = 1 + input.overagePercent / 100;
   const occupiedWells =
@@ -159,6 +166,9 @@ export function calculateReactionRequirements(
       plate.wells.filter((well) => well.sample && well.gene),
     ) ?? [];
   const totalWells = occupiedWells.length;
+  const blankWellCount = occupiedWells.filter(
+    (well) => well.sample && isBlankSample(well.sample),
+  ).length;
   if (layout && totalWells === 0) {
     errors.push(
       "当前布局没有实际反应孔，无法计算试剂用量。 / No occupied reaction wells are available for reagent calculation.",
@@ -169,7 +179,7 @@ export function calculateReactionRequirements(
   const geneCounts = new Map(
     geneOrder.map((gene) => [
       gene.name,
-      { count: 0, geneType: gene.role },
+      { count: 0, blankCount: 0, geneType: gene.role },
     ]),
   );
   for (const well of occupiedWells) {
@@ -179,9 +189,13 @@ export function calculateReactionRequirements(
     if (well.gene) {
       const current = geneCounts.get(well.gene) ?? {
         count: 0,
+        blankCount: 0,
         geneType: well.geneType ?? "target",
       };
       current.count += 1;
+      if (well.sample && isBlankSample(well.sample)) {
+        current.blankCount += 1;
+      }
       geneCounts.set(well.gene, current);
     }
   }
@@ -189,21 +203,28 @@ export function calculateReactionRequirements(
   const geneRequirements = geneOrder
     .map(({ name, role }) => {
       const wellCount = geneCounts.get(name)?.count ?? 0;
+      const blankWellCount = geneCounts.get(name)?.blankCount ?? 0;
       const factor = wellCount * preparationFactor;
+      const replacementWaterUl =
+        blankWellCount * preparationFactor * input.cdnaPerWellUl;
+      const waterUl =
+        factor * Math.max(0, waterPerWellUl) + replacementWaterUl;
       return {
         gene: name,
         geneType: role,
         wellCount,
+        blankWellCount,
         forwardPrimerUl: factor * forwardPrimerPerWellUl,
         reversePrimerUl: factor * reversePrimerPerWellUl,
         primerPairUl: factor * input.primerPairPerWellUl,
         masterMixUl: factor * input.masterMixPerWellUl,
-        waterUl: factor * Math.max(0, waterPerWellUl),
+        waterUl,
         mixExcludingCdnaUl:
           factor *
           (input.masterMixPerWellUl +
             input.primerPairPerWellUl +
-            Math.max(0, waterPerWellUl)),
+            Math.max(0, waterPerWellUl)) +
+          replacementWaterUl,
         reactionVolumeUl: factor * input.totalPerWellUl,
       };
     })
@@ -212,17 +233,27 @@ export function calculateReactionRequirements(
   const sampleRequirements = sampleOrder
     .map((sample) => {
       const wellCount = sampleCounts.get(sample) ?? 0;
-      const theoreticalCdnaUl = wellCount * input.cdnaPerWellUl;
+      const isBlank = isBlankSample(sample);
+      const theoreticalCdnaUl = isBlank
+        ? 0
+        : wellCount * input.cdnaPerWellUl;
       return {
         sample,
         wellCount,
+        isBlank,
         theoreticalCdnaUl,
         recommendedCdnaUl: theoreticalCdnaUl * preparationFactor,
+        replacementWaterUl: isBlank
+          ? wellCount * input.cdnaPerWellUl * preparationFactor
+          : 0,
       };
     })
     .filter((requirement) => requirement.wellCount > 0);
 
   const factor = totalWells * preparationFactor;
+  const nonBlankWellCount = totalWells - blankWellCount;
+  const replacementWaterUl =
+    blankWellCount * preparationFactor * input.cdnaPerWellUl;
   return {
     valid: errors.length === 0,
     errors,
@@ -237,6 +268,7 @@ export function calculateReactionRequirements(
       { key: "water", volumeUl: Math.max(0, waterPerWellUl) },
     ],
     totalWells,
+    blankWellCount,
     geneRequirements,
     sampleRequirements,
     totals: {
@@ -246,8 +278,10 @@ export function calculateReactionRequirements(
       forwardPrimerUl: factor * forwardPrimerPerWellUl,
       reversePrimerUl: factor * reversePrimerPerWellUl,
       primerPairUl: factor * input.primerPairPerWellUl,
-      cdnaUl: factor * input.cdnaPerWellUl,
-      waterUl: factor * Math.max(0, waterPerWellUl),
+      cdnaUl:
+        nonBlankWellCount * preparationFactor * input.cdnaPerWellUl,
+      waterUl:
+        factor * Math.max(0, waterPerWellUl) + replacementWaterUl,
     },
   };
 }

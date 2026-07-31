@@ -2,7 +2,7 @@
   "name": "qpcr-plate-planner",
   "version": "0.1.0",
   "private": true,
-  "description": "Local-first qPCR 96/384-well plate layout planner",
+  "description": "RT-qPCR (SYBR Green) 96/384-well plate layout planner",
   "engines": {
     "node": ">=22.13.0"
   },

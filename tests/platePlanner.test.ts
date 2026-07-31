@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   PlatePlannerError,
   planPlateLayout,
+  refreshPlanDerivedData,
   validateLayout,
 } from "../lib/platePlanner";
 
@@ -57,6 +58,41 @@ test("replicate groups run left-to-right and never wrap a row", () => {
       );
     }
   }
+});
+
+test("places sample-major replicate blocks top-to-bottom before moving right", () => {
+  const input = {
+    plateType: 96 as const,
+    samples: ["S1", "S2"],
+    targetGenes: ["G1", "G2"],
+    referenceGenes: ["R1"],
+    replicates: 3,
+  };
+  const result = planPlateLayout(input);
+  const plate = result.plates[0];
+  const occupiedBlocks = plate.wells
+    .filter((well) => well.replicateIndex === 1)
+    .sort(
+      (left, right) =>
+        Math.floor(left.column / input.replicates) -
+          Math.floor(right.column / input.replicates) ||
+        left.row - right.row,
+    )
+    .map((well) => `${well.wellId}:${well.sample}/${well.gene}`);
+
+  assert.equal(result.strategy, "sample-major");
+  assert.deepEqual(occupiedBlocks, [
+    "A1:S1/R1",
+    "B1:S1/G1",
+    "C1:S1/G2",
+    "D1:S2/R1",
+    "E1:S2/G1",
+    "F1:S2/G2",
+  ]);
+
+  const refreshed = refreshPlanDerivedData(result, input);
+  assert.equal(refreshed.metrics.sampleSwitches, 1);
+  assert.equal(refreshed.metrics.primerSwitches, 5);
 });
 
 test("fills a 96-well plate exactly for 8 samples, 4 genes, triplicates", () => {
@@ -272,6 +308,28 @@ test("validation reports a completely removed target assay as a global error", (
   );
   assert.equal(audit.valid, false);
   assert.equal(missing?.plateNumber, undefined);
+});
+
+test("validation rejects duplicate plate names case-insensitively", () => {
+  const input = {
+    plateType: 96 as const,
+    samples: Array.from({ length: 10 }, (_, index) => `S${index + 1}`),
+    targetGenes: ["G1", "G2", "G3"],
+    referenceGenes: ["R1"],
+    replicates: 3,
+  };
+  const result = planPlateLayout(input);
+  assert.equal(result.plates.length, 2);
+  result.plates[0].name = "Run A";
+  result.plates[1].name = "  run a  ";
+
+  const audit = validateLayout(result, input);
+  assert.equal(audit.valid, false);
+  assert.ok(
+    audit.errors.some(
+      (issue) => issue.code === "E_DUPLICATE_PLATE_NAME",
+    ),
+  );
 });
 
 test("layout is deterministic", () => {

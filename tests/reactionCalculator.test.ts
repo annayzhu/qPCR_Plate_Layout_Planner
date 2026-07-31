@@ -84,6 +84,64 @@ test("counts reference reruns from the actual cross-plate layout", () => {
   );
 });
 
+test("replaces cDNA with water for Blank wells while preserving assay counts", () => {
+  const layout = planPlateLayout({
+    plateType: 96,
+    samples: ["S1", "Blank 1"],
+    targetGenes: ["G1", "G2"],
+    referenceGenes: ["R1"],
+    replicates: 3,
+  });
+  const result = calculateReactionRequirements(
+    layout,
+    {
+      totalPerWellUl: 10,
+      masterMixPerWellUl: 5,
+      primerPairPerWellUl: 0.8,
+      cdnaPerWellUl: 1,
+      overagePercent: 10,
+    },
+    ["S1", "Blank 1"],
+    [
+      { name: "G1", role: "target" },
+      { name: "G2", role: "target" },
+      { name: "R1", role: "reference" },
+    ],
+    ["Blank 1"],
+  );
+
+  assert.equal(result.valid, true);
+  assert.equal(result.totalWells, 18);
+  assert.equal(result.blankWellCount, 9);
+  assert.equal(result.sampleRequirements[0].recommendedCdnaUl, 9.9);
+  assert.deepEqual(result.sampleRequirements[1], {
+    sample: "Blank 1",
+    wellCount: 9,
+    isBlank: true,
+    theoreticalCdnaUl: 0,
+    recommendedCdnaUl: 0,
+    replacementWaterUl: 9.9,
+  });
+  assert.ok(Math.abs(result.totals.cdnaUl - 9.9) < 1e-9);
+  assert.ok(Math.abs(result.totals.waterUl - 73.26) < 1e-9);
+
+  for (const requirement of result.geneRequirements) {
+    assert.equal(requirement.wellCount, 6);
+    assert.equal(requirement.blankWellCount, 3);
+    assert.ok(Math.abs(requirement.waterUl - 24.42) < 1e-9);
+  }
+  assert.equal(
+    result.warnings.some((warning) =>
+      warning.includes("引物储备液浓度"),
+    ),
+    false,
+  );
+  assert.equal(
+    result.warnings.some((warning) => warning.includes("cDNA 浓度")),
+    false,
+  );
+});
+
 test("rejects a reaction system whose components exceed the total volume", () => {
   const layout = planPlateLayout({
     plateType: 96,

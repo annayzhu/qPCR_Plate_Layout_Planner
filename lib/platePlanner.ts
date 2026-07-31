@@ -25,6 +25,7 @@ export interface PlannerWell {
 export interface PlannerPlate {
   id: string;
   plateNumber: number;
+  name: string;
   rows: number;
   columns: number;
   sampleNames: string[];
@@ -124,6 +125,10 @@ export function formatWellId(row: number, column: number) {
     rowNumber = Math.floor((rowNumber - 1) / 26);
   }
   return `${rowLabel}${column + 1}`;
+}
+
+export function defaultPlateName(plateNumber: number) {
+  return `Plate ${String(plateNumber).padStart(2, "0")}`;
 }
 
 function normalized(values: string[], label: "sample" | "gene") {
@@ -400,11 +405,9 @@ function packIntoPlateLimit(
 }
 
 function sampleMajorPairs(samples: string[], genes: string[]) {
-  return samples.flatMap((sample, sampleIndex) => {
-    const orderedGenes =
-      sampleIndex % 2 === 0 ? genes : genes.slice().reverse();
-    return orderedGenes.map((gene) => ({ sample, gene }));
-  });
+  return samples.flatMap((sample) =>
+    genes.map((gene) => ({ sample, gene })),
+  );
 }
 
 function geneMajorPairs(samples: string[], genes: string[]) {
@@ -664,10 +667,8 @@ function sampleMajorSequence(
 ) {
   const sequence: AssayBlock[] = [];
   const plateSamples = sampleOrderForPlate(plate, samples);
-  plateSamples.forEach((sample, sampleIndex) => {
-    const orderedGenes =
-      sampleIndex % 2 === 0 ? genes : genes.slice().reverse();
-    orderedGenes.forEach(({ gene, geneType }) => {
+  plateSamples.forEach((sample) => {
+    genes.forEach(({ gene, geneType }) => {
       if (hasAssay(plate, sample, gene, geneType)) {
         sequence.push({ sample, gene, geneType });
       }
@@ -809,7 +810,7 @@ function buildCandidate(
     ...allocation,
     ...switches,
     stableRank:
-      strategy === "hybrid" ? 0 : strategy === "sample-major" ? 1 : 2,
+      strategy === "sample-major" ? 0 : strategy === "hybrid" ? 1 : 2,
   };
 }
 
@@ -818,9 +819,9 @@ function candidateScore(candidate: LayoutCandidate) {
     candidate.plateCount,
     candidate.samplePlateAppearances,
     candidate.genePlateOccurrences,
+    candidate.stableRank,
     candidate.primerSwitches,
     candidate.sampleSwitches,
-    candidate.stableRank,
   ];
 }
 
@@ -858,15 +859,15 @@ function materializePlate(
   rows: number,
   columns: number,
   replicates: number,
-  blocksPerRow: number,
   inputSamples: string[],
 ): PlannerPlate {
   const wells = emptyWells(rows, columns);
   const wellIndex = new Map(wells.map((well, index) => [well.wellId, index]));
 
   sequence.forEach((block, blockIndex) => {
-    const row = Math.floor(blockIndex / blocksPerRow);
-    const startColumn = (blockIndex % blocksPerRow) * replicates;
+    const row = blockIndex % rows;
+    const blockColumn = Math.floor(blockIndex / rows);
+    const startColumn = blockColumn * replicates;
     for (
       let replicateIndex = 0;
       replicateIndex < replicates;
@@ -897,6 +898,7 @@ function materializePlate(
   return {
     id: `plate-${plateNumber}`,
     plateNumber,
+    name: defaultPlateName(plateNumber),
     rows,
     columns,
     sampleNames: sampleOrderForPlate(packedPlate, inputSamples),
@@ -941,7 +943,6 @@ export function planPlateLayout(rawInput: PlanInput): PlanResult {
       input.dimensions.rows,
       input.dimensions.columns,
       input.replicates,
-      input.blocksPerRow,
       input.samples,
     ),
   );
@@ -1015,7 +1016,10 @@ export function refreshPlanDerivedData(
       .slice()
       .sort(
         (left, right) =>
-          left.row - right.row || left.column - right.column,
+          Math.floor(left.column / input.replicates) -
+            Math.floor(right.column / input.replicates) ||
+          left.row - right.row ||
+          left.column - right.column,
       );
     usedWells += occupied.length;
     manualWells += plate.wells.filter(
@@ -1055,6 +1059,7 @@ export function refreshPlanDerivedData(
     );
     return {
       ...plate,
+      name: plate.name?.trim() || defaultPlateName(plate.plateNumber),
       sampleNames: input.samples.filter((sample) =>
         assignedSamples.has(sample),
       ),
@@ -1142,6 +1147,20 @@ export function validateLayout(
   }
 
   const errors: ValidationIssue[] = [];
+  const seenPlateNames = new Set<string>();
+  for (const plate of result.plates) {
+    const plateName =
+      plate.name?.trim() || defaultPlateName(plate.plateNumber);
+    const normalizedPlateName = plateName.toLocaleLowerCase();
+    if (seenPlateNames.has(normalizedPlateName)) {
+      errors.push({
+        code: "E_DUPLICATE_PLATE_NAME",
+        plateNumber: plate.plateNumber,
+        message: `孔板名称“${plateName}”重复。 / Plate name “${plateName}” is duplicated.`,
+      });
+    }
+    seenPlateNames.add(normalizedPlateName);
+  }
   const globalTargetGroups = new Map<
     string,
     Array<{ well: PlannerWell; plateNumber: number }>

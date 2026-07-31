@@ -1,4 +1,4 @@
-# RT-qPCR(SYBR Green)版布局规划工具
+# RT-qPCR(SYBR Green)板布局规划工具
 
 浏览器端中英文双语工具，用于规划 96/384 孔 RT-qPCR（SYBR Green）实验、手动校正版布局、核算反应体系与试剂需求，并导出单板 Excel 或全部孔板 ZIP。
 
@@ -37,7 +37,7 @@ Prepare volume = required volume × (1 + overage%)
 
 批量导出 ZIP 还包含全部孔板总览工作簿。
 
-## 方法边界 / Method boundary
+## 特别说明 / Special note
 
 本工具不自动添加 NTC、no-RT、阳性模板或板间校准样本。未输入引物储备液浓度和 cDNA 浓度时，只核算体积，不能判断引物终浓度或换算原始 RNA/组织样本量。仅供科研使用（RUO）。
 

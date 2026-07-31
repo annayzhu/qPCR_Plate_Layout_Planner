@@ -18,6 +18,8 @@ export interface ExportableWell {
 
 export interface ExportablePlate {
   plateNumber: number;
+  /** User-editable display name. plateNumber remains the immutable identifier. */
+  name?: string;
   rows: number;
   columns: number;
   wells: ExportableWell[];
@@ -37,6 +39,8 @@ export interface ExportContext {
   repeatedReferenceBlocks: number;
   repeatedReferenceWells: number;
   reactionSystem: ReactionSystemInput;
+  /** Samples marked as Blank use water instead of cDNA template. */
+  blankSamples?: string[];
 }
 
 const TARGET_FILLS = [
@@ -47,6 +51,16 @@ const TARGET_FILLS = [
   "E1E9E3",
   "E3E5EC",
 ];
+
+export const PLATE_WORKBOOK_SHEET_ORDER = [
+  "Plate_Map",
+  "Well_Detail",
+  "Gene_Requirements",
+  "Sample_cDNA",
+  "Total_Requirements",
+  "Design_Summary",
+  "Reaction_Setup",
+] as const;
 
 const thinBorder = {
   style: "thin",
@@ -61,7 +75,52 @@ function safeDateStamp(date = new Date()) {
 }
 
 function safeFilePart(value: string) {
-  return value.replace(/[\\/:*?"<>|]/g, "_").slice(0, 80);
+  const cleaned = value
+    .normalize("NFKC")
+    .replace(/[\u0000-\u001F\u007F\\/:*?"<>|]/g, "_")
+    .replace(/\s+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^[._\s]+|[._\s]+$/g, "")
+    .slice(0, 60);
+  if (!cleaned || cleaned === "." || cleaned === "..") return "Untitled";
+  return /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i.test(cleaned)
+    ? `_${cleaned}`
+    : cleaned;
+}
+
+function defaultPlateName(plateNumber: number) {
+  return `Plate ${String(plateNumber).padStart(2, "0")}`;
+}
+
+function plateName(plate: ExportablePlate) {
+  return plate.name?.trim() || defaultPlateName(plate.plateNumber);
+}
+
+function plateScopeLabel(plate: ExportablePlate) {
+  const immutableLabel = defaultPlateName(plate.plateNumber);
+  const customName = plateName(plate);
+  return customName.toLocaleLowerCase() === immutableLabel.toLocaleLowerCase()
+    ? immutableLabel
+    : `${customName} (${immutableLabel})`;
+}
+
+export function plateWorkbookFilename(
+  plate: ExportablePlate,
+  context: Pick<ExportContext, "plateType">,
+  date = new Date(),
+) {
+  const immutablePart = `Plate_${String(plate.plateNumber).padStart(2, "0")}`;
+  const customName = plateName(plate);
+  const defaultName = defaultPlateName(plate.plateNumber);
+  const customPart =
+    customName.toLocaleLowerCase() === defaultName.toLocaleLowerCase()
+      ? ""
+      : `_${safeFilePart(customName)}`;
+  return `qPCR_${immutablePart}${customPart}_${context.plateType}well_${safeDateStamp(date)}.xlsx`;
+}
+
+export function overviewWorkbookFilename(date = new Date()) {
+  return `qPCR_All_Plates_Overview_${safeDateStamp(date)}.xlsx`;
 }
 
 function rowLabel(index: number) {
@@ -100,39 +159,75 @@ function appendReactionSheets(
   const occupied = plates.flatMap((plate) =>
     plate.wells.filter((well) => well.sample && well.gene),
   );
+  const blankSampleSet = new Set(context.blankSamples ?? []);
+  const blankWells = occupied.filter(
+    (well) => well.sample && blankSampleSet.has(well.sample),
+  );
+  const templateWells = occupied.length - blankWells.length;
   const factor = 1 + context.reactionSystem.overagePercent / 100;
   const forwardPerWell = context.reactionSystem.primerPairPerWellUl / 2;
   const reversePerWell = context.reactionSystem.primerPairPerWellUl / 2;
-  const waterPerWell = Math.max(
+  const sampleWaterPerWell = Math.max(
     0,
     context.reactionSystem.totalPerWellUl -
       context.reactionSystem.masterMixPerWellUl -
       context.reactionSystem.primerPairPerWellUl -
       context.reactionSystem.cdnaPerWellUl,
   );
+  const blankWaterPerWell =
+    sampleWaterPerWell + context.reactionSystem.cdnaPerWellUl;
   const perWellRows = [
-    ["范围 / Scope", scope],
-    ["组分 / Component", "每孔体积 / µL per well"],
+    ["范围 / Scope", scope, ""],
+    [
+      "组分 / Component",
+      "样本孔 / Sample well (µL)",
+      "Blank 孔 / Blank well (µL)",
+    ],
     [
       "SYBR Green 反应预混液 / Master mix",
       context.reactionSystem.masterMixPerWellUl,
+      context.reactionSystem.masterMixPerWellUl,
     ],
-    ["上游引物 / Forward primer", forwardPerWell],
-    ["下游引物 / Reverse primer", reversePerWell],
-    ["cDNA 模板 / cDNA template", context.reactionSystem.cdnaPerWellUl],
-    ["RNase-free ddH2O / Nuclease-free water", waterPerWell],
-    ["总体积 / Total volume", context.reactionSystem.totalPerWellUl],
-    ["实际反应孔 / Occupied wells", occupied.length],
-    ["配液余量 / Pipetting overage", `${context.reactionSystem.overagePercent}%`],
+    ["上游引物 / Forward primer", forwardPerWell, forwardPerWell],
+    ["下游引物 / Reverse primer", reversePerWell, reversePerWell],
+    [
+      "cDNA 模板 / cDNA template",
+      context.reactionSystem.cdnaPerWellUl,
+      0,
+    ],
+    [
+      "RNase-free ddH2O / Nuclease-free water",
+      sampleWaterPerWell,
+      blankWaterPerWell,
+    ],
+    [
+      "总体积 / Total volume",
+      context.reactionSystem.totalPerWellUl,
+      context.reactionSystem.totalPerWellUl,
+    ],
+    [
+      "实际反应孔 / Occupied wells",
+      `${templateWells} 样本孔 / sample wells`,
+      `${blankWells.length} Blank 孔 / Blank wells`,
+    ],
+    [
+      "配液余量 / Pipetting overage",
+      `${context.reactionSystem.overagePercent}%`,
+      `${context.reactionSystem.overagePercent}%`,
+    ],
     [
       "前提 / Assumption",
       "上、下游引物按等体积分配；未输入引物与 cDNA 浓度，不能核查终浓度或换算原始 RNA 量。 / Forward and reverse primers are split 1:1 by volume. Stock concentration and cDNA concentration are not entered.",
+      "Blank 孔不加 cDNA，并以等体积 RNase-free ddH2O 补足。 / Blank wells omit cDNA and replace it with the same volume of RNase-free water.",
     ],
   ];
   const reactionSheet = XLSX.utils.aoa_to_sheet(perWellRows);
-  reactionSheet["!cols"] = [{ wch: 48 }, { wch: 88 }];
+  reactionSheet["!cols"] = [{ wch: 48 }, { wch: 62 }, { wch: 62 }];
 
   const recommendedReactions = occupied.length * factor;
+  const theoreticalWater =
+    occupied.length * sampleWaterPerWell +
+    blankWells.length * context.reactionSystem.cdnaPerWellUl;
   const totalRows = [
     ["范围 / Scope", scope, ""],
     [
@@ -167,18 +262,29 @@ function appendReactionSheets(
       roundedVolume(recommendedReactions * reversePerWell),
     ],
     [
-      "cDNA 模板 / cDNA template",
+      "上下游引物合计 / Primer pair total",
       roundedVolume(
-        occupied.length * context.reactionSystem.cdnaPerWellUl,
+        occupied.length * context.reactionSystem.primerPairPerWellUl,
       ),
       roundedVolume(
-        recommendedReactions * context.reactionSystem.cdnaPerWellUl,
+        recommendedReactions * context.reactionSystem.primerPairPerWellUl,
+      ),
+    ],
+    [
+      "cDNA 模板 / cDNA template",
+      roundedVolume(
+        templateWells * context.reactionSystem.cdnaPerWellUl,
+      ),
+      roundedVolume(
+        templateWells *
+          factor *
+          context.reactionSystem.cdnaPerWellUl,
       ),
     ],
     [
       "无核酸酶水 / Nuclease-free water",
-      roundedVolume(occupied.length * waterPerWell),
-      roundedVolume(recommendedReactions * waterPerWell),
+      roundedVolume(theoreticalWater),
+      roundedVolume(theoreticalWater * factor),
     ],
   ];
   const totalSheet = XLSX.utils.aoa_to_sheet(totalRows);
@@ -186,17 +292,21 @@ function appendReactionSheets(
 
   const geneCounts = new Map<
     string,
-    { count: number; geneType: string }
+    { count: number; blankCount: number; geneType: string }
   >();
   const sampleCounts = new Map<string, number>();
   for (const well of occupied) {
     if (well.gene) {
       const current = geneCounts.get(well.gene) ?? {
         count: 0,
+        blankCount: 0,
         geneType:
           well.geneType === "reference" ? "Reference" : "Target",
       };
       current.count += 1;
+      if (well.sample && blankSampleSet.has(well.sample)) {
+        current.blankCount += 1;
+      }
       geneCounts.set(well.gene, current);
     }
     if (well.sample) {
@@ -232,13 +342,17 @@ function appendReactionSheets(
             context.reactionSystem.masterMixPerWellUl,
         ),
         "用水 / Water (µL)": roundedVolume(
-          prepareReactions * waterPerWell,
+          (item.count * sampleWaterPerWell +
+            item.blankCount * context.reactionSystem.cdnaPerWellUl) *
+            factor,
         ),
         "配液不含cDNA / Mix excluding cDNA (µL)": roundedVolume(
-          prepareReactions *
+          (item.count *
             (context.reactionSystem.masterMixPerWellUl +
               context.reactionSystem.primerPairPerWellUl +
-              waterPerWell),
+              sampleWaterPerWell) +
+            item.blankCount * context.reactionSystem.cdnaPerWellUl) *
+            factor,
         ),
         "完整反应体积 / Reaction total (µL)": roundedVolume(
           prepareReactions * context.reactionSystem.totalPerWellUl,
@@ -257,16 +371,28 @@ function appendReactionSheets(
 
   const sampleRows = Array.from(sampleCounts.entries()).map(
     ([sample, wellCount]) => {
-      const theoretical =
-        wellCount * context.reactionSystem.cdnaPerWellUl;
+      const isBlank = blankSampleSet.has(sample);
+      const theoretical = isBlank
+        ? 0
+        : wellCount * context.reactionSystem.cdnaPerWellUl;
+      const replacementWater = isBlank
+        ? wellCount * context.reactionSystem.cdnaPerWellUl
+        : 0;
       return {
         "范围 / Scope": scope,
         "样本 / Sample": sample,
+        "样本类型 / Sample type": isBlank
+          ? "空白 / Blank"
+          : "样本 / Sample",
         "孔数 / Well count": wellCount,
         "理论 cDNA / Required cDNA (µL)": roundedVolume(theoretical),
         "建议准备 cDNA / Prepare cDNA (µL)": roundedVolume(
           theoretical * factor,
         ),
+        "理论替代补水 / Required replacement water (µL)":
+          roundedVolume(replacementWater),
+        "建议替代补水 / Prepare replacement water (µL)":
+          roundedVolume(replacementWater * factor),
       };
     },
   );
@@ -274,9 +400,12 @@ function appendReactionSheets(
   sampleSheet["!cols"] = [
     { wch: 24 },
     { wch: 28 },
+    { wch: 20 },
     { wch: 14 },
     { wch: 24 },
     { wch: 22 },
+    { wch: 32 },
+    { wch: 31 },
   ];
 
   XLSX.utils.book_append_sheet(workbook, reactionSheet, "Reaction_Setup");
@@ -339,7 +468,7 @@ export async function buildPlateWorkbook(
 
   const mapRows: Array<Array<string | number>> = [
     [
-      `qPCR Plate ${String(plate.plateNumber).padStart(2, "0")} · ${context.plateType} 孔板`,
+      `${plateScopeLabel(plate)} · ${context.plateType} 孔板 / ${context.plateType}-well plate`,
     ],
     ["", ...Array.from({ length: plate.columns }, (_, index) => index + 1)],
   ];
@@ -479,7 +608,8 @@ export async function buildPlateWorkbook(
     .slice()
     .sort((a, b) => a.row - b.row || a.column - b.column)
     .map((well) => ({
-      "孔板 / Plate": `Plate ${String(plate.plateNumber).padStart(2, "0")}`,
+      "孔板名称 / Plate name": plateName(plate),
+      "孔板编号 / Plate number": plate.plateNumber,
       "孔位 / Well": well.wellId,
       "行 / Row": rowLabel(well.row),
       "列 / Column": well.column + 1,
@@ -498,10 +628,11 @@ export async function buildPlateWorkbook(
     }));
   const detailSheet = XLSX.utils.json_to_sheet(detailRows);
   detailSheet["!autofilter"] = {
-    ref: `A1:J${Math.max(2, detailRows.length + 1)}`,
+    ref: `A1:K${Math.max(2, detailRows.length + 1)}`,
   };
   detailSheet["!cols"] = [
-    { wch: 12 },
+    { wch: 24 },
+    { wch: 16 },
     { wch: 8 },
     { wch: 7 },
     { wch: 9 },
@@ -515,7 +646,8 @@ export async function buildPlateWorkbook(
 
   const summaryRows = [
     ["字段 / Field", "值 / Value"],
-    ["孔板 / Plate", `Plate ${String(plate.plateNumber).padStart(2, "0")}`],
+    ["孔板名称 / Plate name", plateName(plate)],
+    ["孔板编号 / Plate number", plate.plateNumber],
     ["孔板规格 / Plate format", `${context.plateType} 孔 / wells`],
     ["技术复孔 / Technical replicates", context.replicates],
     ["实验总样本数 / Total samples", context.samples.length],
@@ -558,7 +690,7 @@ export async function buildPlateWorkbook(
     ["校验状态 / Validation", context.validationStatus],
     ["生成时间 / Generated at", context.generatedAt],
     [
-      "方法边界 / Method boundary",
+      "特别说明 / Special note",
       "本布局不自动添加 NTC、no-RT 或阳性模板控制；请另行核查熔解曲线、扩增效率和内参稳定性，并遵循本地 SOP。 / Controls are not added automatically; verify melt profiles, assay efficiency, reference stability, and the local SOP.",
     ],
   ];
@@ -573,8 +705,9 @@ export async function buildPlateWorkbook(
     workbook,
     [plate],
     context,
-    `Plate ${String(plate.plateNumber).padStart(2, "0")}`,
+    plateScopeLabel(plate),
   );
+  workbook.SheetNames = [...PLATE_WORKBOOK_SHEET_ORDER];
   return { XLSX, workbook };
 }
 
@@ -588,11 +721,11 @@ export async function exportPlateExcel(
     type: "array",
     compression: true,
   });
-  const filename = `qPCR_Plate_${String(plate.plateNumber).padStart(2, "0")}_${context.plateType}well_${safeDateStamp()}.xlsx`;
+  const filename = plateWorkbookFilename(plate, context);
   triggerDownload(
     data,
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    safeFilePart(filename),
+    filename,
   );
 }
 
@@ -607,6 +740,7 @@ export async function exportAllPlateExcels(
   const JSZip = JSZipModule.default;
   const XLSX = XLSXModule.default;
   const zip = new JSZip();
+  const exportedAt = new Date();
 
   for (const plate of plates) {
     const { workbook } = await buildPlateWorkbook(plate, context);
@@ -616,7 +750,7 @@ export async function exportAllPlateExcels(
       compression: true,
     });
     zip.file(
-      `qPCR_Plate_${String(plate.plateNumber).padStart(2, "0")}_${context.plateType}well.xlsx`,
+      plateWorkbookFilename(plate, context, exportedAt),
       data,
     );
   }
@@ -630,7 +764,8 @@ export async function exportAllPlateExcels(
       occupied.flatMap((well) => (well.sample ? [well.sample] : [])),
     );
     return {
-      "孔板 / Plate": `Plate ${String(plate.plateNumber).padStart(2, "0")}`,
+      "孔板名称 / Plate name": plateName(plate),
+      "孔板编号 / Plate number": plate.plateNumber,
       "本板样本数 / Samples on plate": samplesOnPlate.size,
       "已用孔 / Used wells": used,
       "目的基因孔 / Target wells": occupied.filter(
@@ -671,12 +806,12 @@ export async function exportAllPlateExcels(
     type: "array",
     compression: true,
   });
-  zip.file("qPCR_All_Plates_Overview.xlsx", overviewData);
+  zip.file(overviewWorkbookFilename(exportedAt), overviewData);
 
   const archive = await zip.generateAsync({ type: "blob" });
   triggerDownload(
     archive,
     "application/zip",
-    `qPCR_plate_layout_${safeDateStamp()}.zip`,
+    `qPCR_plate_layout_${safeDateStamp(exportedAt)}.zip`,
   );
 }

@@ -8,8 +8,11 @@ import {
   FileSpreadsheet,
   FlaskConical,
   Info,
+  Languages,
   Layers3,
   Minus,
+  Move,
+  Pencil,
   Plus,
   Redo2,
   RotateCcw,
@@ -25,6 +28,7 @@ import {
   Fragment,
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
+  useCallback,
   useEffect,
   useMemo,
   useState,
@@ -40,6 +44,12 @@ import {
   type ReactionSystemInput,
 } from "@/lib/reactionCalculator";
 import {
+  assignSelectedWells,
+  rectangularWellIds,
+  translateSelectedWells,
+} from "@/lib/manualLayout";
+import {
+  defaultPlateName,
   formatWellId,
   getPlateDimensions,
   planPlateLayout,
@@ -56,6 +66,8 @@ import {
 import { ReactionCalculator } from "@/app/ReactionCalculator";
 
 type GeneRole = "target" | "reference";
+type SampleKind = "sample" | "blank";
+type Language = "zh" | "en";
 
 interface GeneEntry {
   id: string;
@@ -63,10 +75,15 @@ interface GeneEntry {
   role: GeneRole;
 }
 
+interface SampleEntry {
+  id: string;
+  name: string;
+  kind: SampleKind;
+}
+
 interface EditorState {
   plateIndex: number;
-  row: number;
-  startColumn: number;
+  wellIds: string[];
   mode: "assay" | "empty";
   sample: string;
   gene: string;
@@ -78,6 +95,21 @@ interface ToastState {
 }
 
 interface StoredPlannerState {
+  version: 2;
+  plateType: PlateType;
+  samples: SampleEntry[];
+  genes: GeneEntry[];
+  replicates: number;
+  layout: PlanResult | null;
+  automaticLayout: PlanResult | null;
+  layoutSignature: string;
+  generatedAt: string;
+  confirmed: Record<string, boolean>;
+  reactionSystem?: ReactionSystemInput;
+  language: Language;
+}
+
+interface LegacyStoredPlannerState {
   version: 1;
   plateType: PlateType;
   samples: string[];
@@ -121,6 +153,25 @@ function clonePlan<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
+function withPlateNames(result: PlanResult | null) {
+  if (!result) return null;
+  return {
+    ...result,
+    plates: result.plates.map((plate) => ({
+      ...plate,
+      name: plate.name?.trim() || defaultPlateName(plate.plateNumber),
+    })),
+  };
+}
+
+function migrateLegacySamples(samples: string[]): SampleEntry[] {
+  return samples.map((name) => ({
+    id: makeId("sample"),
+    name,
+    kind: "sample",
+  }));
+}
+
 function parseExcelNames(value: string) {
   return value
     .split(/\t|\r?\n/)
@@ -134,13 +185,13 @@ function normalizedKey(value: string) {
 
 function experimentSignature(
   plateType: PlateType,
-  samples: string[],
+  samples: SampleEntry[],
   genes: GeneEntry[],
   replicates: number,
 ) {
   return JSON.stringify({
     plateType,
-    samples,
+    samples: samples.map(({ name }) => name),
     genes: genes.map(({ name, role }) => ({ name, role })),
     replicates,
   });
@@ -177,39 +228,31 @@ function wellVisual(
   } as CSSProperties;
 }
 
-function blockLabel(
-  row: number,
-  startColumn: number,
-  replicates: number,
-) {
-  return `${formatWellId(row, startColumn)}–${formatWellId(
-    row,
-    startColumn + replicates - 1,
-  )}`;
-}
-
 function shortLabel(value: string, max: number) {
   return value.length > max ? `${value.slice(0, max - 1)}…` : value;
 }
 
 function plateStatus(
   confirmed: boolean,
-  invalid: boolean,
+  warningCount: number,
   stale: boolean,
+  language: Language,
 ) {
+  const tr = (zh: string, en: string) => (language === "zh" ? zh : en);
   if (stale)
-    return { label: "设置已变更 / Stale", className: "invalid" };
-  if (invalid)
-    return { label: "需修复 / Fix", className: "invalid" };
+    return { label: tr("设置已变更", "Stale"), className: "invalid" };
   if (confirmed)
-    return { label: "已确认 / Confirmed", className: "confirmed" };
-  return { label: "草稿 / Draft", className: "" };
+    return { label: tr("已确认", "Confirmed"), className: "confirmed" };
+  if (warningCount > 0)
+    return { label: tr("有提醒", "Advisory"), className: "warning" };
+  return { label: tr("草稿", "Draft"), className: "" };
 }
 
 export function QpcrPlanner() {
   const [plateType, setPlateType] = useState<PlateType>(96);
-  const [samples, setSamples] = useState<string[]>([]);
+  const [samples, setSamples] = useState<SampleEntry[]>([]);
   const [genes, setGenes] = useState<GeneEntry[]>([]);
+  const [language, setLanguage] = useState<Language>("zh");
   const [replicates, setReplicates] = useState(3);
   const [sampleInput, setSampleInput] = useState("");
   const [geneInput, setGeneInput] = useState("");
@@ -226,6 +269,13 @@ export function QpcrPlanner() {
   const [undoStack, setUndoStack] = useState<PlanResult[]>([]);
   const [redoStack, setRedoStack] = useState<PlanResult[]>([]);
   const [editor, setEditor] = useState<EditorState | null>(null);
+  const [selectedWellIds, setSelectedWellIds] = useState<string[]>([]);
+  const [selectionAnchorId, setSelectionAnchorId] = useState<string | null>(
+    null,
+  );
+  const [moveMode, setMoveMode] = useState(false);
+  const [editingPlateName, setEditingPlateName] = useState(false);
+  const [plateNameDraft, setPlateNameDraft] = useState("");
   const [toast, setToast] = useState<ToastState | null>(null);
   const [savedAt, setSavedAt] = useState("");
   const [dirty, setDirty] = useState(false);
@@ -233,6 +283,32 @@ export function QpcrPlanner() {
   const [reactionSystem, setReactionSystem] =
     useState<ReactionSystemInput>(DEFAULT_REACTION_SYSTEM);
 
+  const tr = useCallback(
+    (zh: string, en: string) => (language === "zh" ? zh : en),
+    [language],
+  );
+  const localizeMessage = (message: string) => {
+    const divider = message.lastIndexOf(" / ");
+    if (divider < 0) return message;
+    return language === "zh"
+      ? message.slice(0, divider)
+      : message.slice(divider + 3);
+  };
+  const sampleNames = useMemo(
+    () => samples.map((sample) => sample.name),
+    [samples],
+  );
+  const blankSampleNames = useMemo(
+    () =>
+      samples
+        .filter((sample) => sample.kind === "blank")
+        .map((sample) => sample.name),
+    [samples],
+  );
+  const blankSampleSet = useMemo(
+    () => new Set(blankSampleNames),
+    [blankSampleNames],
+  );
   const dimensions = getPlateDimensions(plateType);
   const targetGenes = useMemo(
     () => genes.filter((gene) => gene.role === "target").map((gene) => gene.name),
@@ -249,12 +325,12 @@ export function QpcrPlanner() {
   const planInput: PlanInput = useMemo(
     () => ({
       plateType,
-      samples,
+      samples: sampleNames,
       targetGenes,
       referenceGenes,
       replicates,
     }),
-    [plateType, referenceGenes, replicates, samples, targetGenes],
+    [plateType, referenceGenes, replicates, sampleNames, targetGenes],
   );
 
   const currentSignature = useMemo(
@@ -262,32 +338,44 @@ export function QpcrPlanner() {
     [genes, plateType, replicates, samples],
   );
   const settingsStale = Boolean(layout && layoutSignature !== currentSignature);
-  const reactionWells = samples.length * genes.length * replicates;
+  const reactionWells = sampleNames.length * genes.length * replicates;
   const effectiveBlocks =
     dimensions.rows * Math.floor(dimensions.columns / Math.max(1, replicates));
   const sampleFullRunWells = genes.length * replicates;
 
   const inputIssues = useMemo(() => {
     const issues: string[] = [];
-    if (samples.length === 0)
-      issues.push("请至少添加 1 个样本 / Add at least one sample");
+    if (sampleNames.length === 0)
+      issues.push(tr("请至少添加 1 个样本", "Add at least one sample"));
     if (targetGenes.length === 0)
-      issues.push("请至少添加 1 个目的基因 / Add at least one target assay");
+      issues.push(tr("请至少添加 1 个目的基因", "Add at least one target assay"));
     if (referenceGenes.length === 0)
       issues.push(
-        "请至少将 1 个基因标记为内参 / Mark at least one assay as a reference",
+        tr(
+          "请至少将 1 个基因标记为内参",
+          "Mark at least one assay as a reference",
+        ),
       );
     if (!Number.isInteger(replicates) || replicates < 1)
       issues.push(
-        "复孔数必须是正整数 / Replicate count must be a positive integer",
+        tr(
+          "复孔数必须是正整数",
+          "Replicate count must be a positive integer",
+        ),
       );
     if (replicates > dimensions.columns)
       issues.push(
-        `复孔数不能超过单行 ${dimensions.columns} 孔 / Replicates cannot exceed ${dimensions.columns} columns`,
+        tr(
+          `复孔数不能超过单行 ${dimensions.columns} 孔`,
+          `Replicates cannot exceed ${dimensions.columns} columns`,
+        ),
       );
     if (referenceGenes.length + 1 > effectiveBlocks)
       issues.push(
-        "全部内参加至少 1 个目的基因的同板配对无法放入当前孔板 / One target plus all references cannot fit on this plate",
+        tr(
+          "全部内参加至少 1 个目的基因的同板配对无法放入当前孔板",
+          "One target plus all references cannot fit on this plate",
+        ),
       );
     return issues;
   }, [
@@ -295,8 +383,9 @@ export function QpcrPlanner() {
     effectiveBlocks,
     referenceGenes.length,
     replicates,
-    samples.length,
+    sampleNames.length,
     targetGenes.length,
+    tr,
   ]);
 
   const audit = useMemo(
@@ -311,13 +400,14 @@ export function QpcrPlanner() {
       calculateReactionRequirements(
         layout,
         reactionSystem,
-        samples,
+        sampleNames,
         genes.map((gene) => ({
           name: gene.name,
           role: gene.role,
         })),
+        blankSampleNames,
       ),
-    [genes, layout, reactionSystem, samples],
+    [blankSampleNames, genes, layout, reactionSystem, sampleNames],
   );
 
   const activePlate = layout?.plates[activePlateIndex] ?? null;
@@ -326,7 +416,6 @@ export function QpcrPlanner() {
     : false;
   const allConfirmed = Boolean(
     layout &&
-      audit.valid &&
       reactionCalculation.valid &&
       !settingsStale &&
       layout.plates.every((plate) => confirmed[String(plate.plateNumber)]),
@@ -337,21 +426,38 @@ export function QpcrPlanner() {
       try {
         const saved = window.localStorage.getItem(STORAGE_KEY);
         if (saved) {
-          const parsed = JSON.parse(saved) as StoredPlannerState;
+          const parsed = JSON.parse(saved) as
+            | StoredPlannerState
+            | LegacyStoredPlannerState;
           if (parsed.version === 1) {
             setPlateType(parsed.plateType);
-            setSamples(parsed.samples);
+            setSamples(migrateLegacySamples(parsed.samples));
             setGenes(parsed.genes);
             setReplicates(parsed.replicates);
-            setLayout(parsed.layout);
-            setAutomaticLayout(parsed.automaticLayout);
+            setLayout(withPlateNames(parsed.layout));
+            setAutomaticLayout(withPlateNames(parsed.automaticLayout));
             setLayoutSignature(parsed.layoutSignature);
             setGeneratedAt(parsed.generatedAt);
             setConfirmed(parsed.confirmed);
             setReactionSystem(
               parsed.reactionSystem ?? DEFAULT_REACTION_SYSTEM,
             );
-            setSavedAt("已恢复 / Restored");
+            setSavedAt("restored");
+          } else if (parsed.version === 2) {
+            setPlateType(parsed.plateType);
+            setSamples(parsed.samples);
+            setGenes(parsed.genes);
+            setReplicates(parsed.replicates);
+            setLayout(withPlateNames(parsed.layout));
+            setAutomaticLayout(withPlateNames(parsed.automaticLayout));
+            setLayoutSignature(parsed.layoutSignature);
+            setGeneratedAt(parsed.generatedAt);
+            setConfirmed(parsed.confirmed);
+            setReactionSystem(
+              parsed.reactionSystem ?? DEFAULT_REACTION_SYSTEM,
+            );
+            setLanguage(parsed.language ?? "zh");
+            setSavedAt("restored");
           }
         }
       } catch {
@@ -366,6 +472,10 @@ export function QpcrPlanner() {
     }, 0);
     return () => window.clearTimeout(restoreTimer);
   }, []);
+
+  useEffect(() => {
+    document.documentElement.lang = language === "zh" ? "zh-CN" : "en";
+  }, [language]);
 
   useEffect(() => {
     if (!toast) return;
@@ -388,8 +498,10 @@ export function QpcrPlanner() {
   }
 
   function addSamples(values: string[]) {
-    const existing = new Set(samples.map(normalizedKey));
-    const additions: string[] = [];
+    const existing = new Set(
+      samples.map((sample) => normalizedKey(sample.name)),
+    );
+    const additions: SampleEntry[] = [];
     const duplicates: string[] = [];
     for (const rawValue of values) {
       const value = rawValue.trim();
@@ -400,7 +512,11 @@ export function QpcrPlanner() {
         continue;
       }
       existing.add(key);
-      additions.push(value);
+      additions.push({
+        id: makeId("sample"),
+        name: value,
+        kind: "sample",
+      });
     }
     if (additions.length > 0) {
       setSamples((current) => [...current, ...additions]);
@@ -409,14 +525,22 @@ export function QpcrPlanner() {
     if (duplicates.length > 0) {
       setToast({
         tone: "error",
-        message: `已跳过 ${duplicates.length} 个重复样本 / Skipped ${duplicates.length} duplicate sample(s): ${duplicates
-          .slice(0, 3)
-          .join("、")}${duplicates.length > 3 ? "…" : ""}`,
+        message: tr(
+          `已跳过 ${duplicates.length} 个重复样本：${duplicates
+            .slice(0, 3)
+            .join("、")}${duplicates.length > 3 ? "…" : ""}`,
+          `Skipped ${duplicates.length} duplicate sample(s): ${duplicates
+            .slice(0, 3)
+            .join(", ")}${duplicates.length > 3 ? "…" : ""}`,
+        ),
       });
     } else if (additions.length > 0) {
       setToast({
         tone: "success",
-        message: `已添加 ${additions.length} 个样本。 / Added ${additions.length} sample(s).`,
+        message: tr(
+          `已添加 ${additions.length} 个样本。`,
+          `Added ${additions.length} sample(s).`,
+        ),
       });
     }
   }
@@ -443,14 +567,22 @@ export function QpcrPlanner() {
     if (duplicates.length > 0) {
       setToast({
         tone: "error",
-        message: `已跳过 ${duplicates.length} 个重复基因 / Skipped ${duplicates.length} duplicate assay(s): ${duplicates
-          .slice(0, 3)
-          .join("、")}${duplicates.length > 3 ? "…" : ""}`,
+        message: tr(
+          `已跳过 ${duplicates.length} 个重复基因：${duplicates
+            .slice(0, 3)
+            .join("、")}${duplicates.length > 3 ? "…" : ""}`,
+          `Skipped ${duplicates.length} duplicate assay(s): ${duplicates
+            .slice(0, 3)
+            .join(", ")}${duplicates.length > 3 ? "…" : ""}`,
+        ),
       });
     } else if (additions.length > 0) {
       setToast({
         tone: "success",
-        message: `已添加 ${additions.length} 个基因；新导入项默认为目的基因。 / Added ${additions.length} assay(s); imported assays default to target.`,
+        message: tr(
+          `已添加 ${additions.length} 个基因；新导入项默认为目的基因。`,
+          `Added ${additions.length} assay(s); imported assays default to target.`,
+        ),
       });
     }
   }
@@ -470,9 +602,13 @@ export function QpcrPlanner() {
   }
 
   function loadExample() {
-    const exampleSamples = Array.from(
+    const exampleSamples: SampleEntry[] = Array.from(
       { length: 8 },
-      (_, index) => `Sample_${String(index + 1).padStart(2, "0")}`,
+      (_, index) => ({
+        id: makeId("sample"),
+        name: `Sample_${String(index + 1).padStart(2, "0")}`,
+        kind: "sample" as const,
+      }),
     );
     const exampleGenes: GeneEntry[] = [
       { id: makeId("gene"), name: "GAPDH", role: "reference" },
@@ -488,11 +624,16 @@ export function QpcrPlanner() {
     setAutomaticLayout(null);
     setConfirmed({});
     setActivePlateIndex(0);
+    setSelectedWellIds([]);
+    setSelectionAnchorId(null);
+    setMoveMode(false);
     markChanged();
     setToast({
       tone: "neutral",
-      message:
-        "已载入 8 个样本、3 个目的基因和 1 个内参的示例。 / Loaded an example with 8 samples, 3 targets, and 1 reference.",
+      message: tr(
+        "已载入 8 个样本、3 个目的基因和 1 个内参的示例。",
+        "Loaded an example with 8 samples, 3 targets, and 1 reference.",
+      ),
     });
   }
 
@@ -506,7 +647,10 @@ export function QpcrPlanner() {
         plate.wells.some((well) => well.source === "manual"),
       ) &&
       !window.confirm(
-        "重新生成将覆盖当前的手动修改，是否继续？ / Regenerating will overwrite manual edits. Continue?",
+        tr(
+          "重新生成将覆盖当前的手动修改，是否继续？",
+          "Regenerating will overwrite manual edits. Continue?",
+        ),
       )
     ) {
       return;
@@ -522,18 +666,24 @@ export function QpcrPlanner() {
       setUndoStack([]);
       setRedoStack([]);
       setActivePlateIndex(0);
+      setSelectedWellIds([]);
+      setSelectionAnchorId(null);
+      setMoveMode(false);
       markChanged();
       setToast({
         tone: "success",
-        message: `已生成 ${next.plates.length} 块 ${plateType} 孔板；凡含该样本目的基因的板均已重做全部内参。 / Generated ${next.plates.length} plate(s); all references are rerun on every plate containing that sample's targets.`,
+        message: tr(
+          `已生成 ${next.plates.length} 块 ${plateType} 孔板；目的基因延续到下一板时，已重新安排该样本的全部内参。`,
+          `Generated ${next.plates.length} ${plateType}-well plate(s); all references are rerun whenever a sample's targets continue onto another plate.`,
+        ),
       });
     } catch (error) {
       setToast({
         tone: "error",
         message:
           error instanceof Error
-            ? error.message
-            : "无法生成布局。 / Unable to generate a layout.",
+            ? localizeMessage(error.message)
+            : tr("无法生成布局。", "Unable to generate a layout."),
       });
     }
   }
@@ -597,7 +747,7 @@ export function QpcrPlanner() {
 
   function savePlanner() {
     const payload: StoredPlannerState = {
-      version: 1,
+      version: 2,
       plateType,
       samples,
       genes,
@@ -608,6 +758,7 @@ export function QpcrPlanner() {
       generatedAt,
       confirmed,
       reactionSystem,
+      language,
     };
     try {
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
@@ -616,46 +767,80 @@ export function QpcrPlanner() {
         minute: "2-digit",
         hour12: false,
       });
-      setSavedAt(`已保存 / Saved ${time}`);
+      setSavedAt(time);
       setDirty(false);
       setToast({
         tone: "success",
-        message:
-          "方案已保存在本机浏览器。 / Plan saved in this local browser.",
+        message: tr(
+          "方案已保存在本机浏览器。",
+          "Plan saved in this browser.",
+        ),
       });
     } catch {
       setToast({
         tone: "error",
-        message:
-          "保存失败。请检查浏览器是否允许本地存储。 / Save failed; check whether local browser storage is allowed.",
+        message: tr(
+          "保存失败。请检查浏览器是否允许本地存储。",
+          "Save failed; check whether browser storage is allowed.",
+        ),
       });
     }
   }
 
-  function openEditor(
+  function openEditorForSelection(
+    plateIndex: number,
+    plate: PlannerPlate,
+    wellIds = selectedWellIds,
+  ) {
+    if (confirmed[String(plate.plateNumber)] || settingsStale) return;
+    const selected = plate.wells.filter((well) =>
+      wellIds.includes(well.wellId),
+    );
+    if (selected.length === 0) return;
+    const occupied = selected.find((well) => well.sample && well.gene);
+    setEditor({
+      plateIndex,
+      wellIds,
+      mode: occupied ? "assay" : "empty",
+      sample: occupied?.sample ?? sampleNames[0] ?? "",
+      gene: occupied?.gene ?? genes[0]?.name ?? "",
+    });
+  }
+
+  function handleWellSelection(
+    event: React.MouseEvent<HTMLButtonElement>,
     plateIndex: number,
     plate: PlannerPlate,
     well: PlannerWell,
   ) {
     if (confirmed[String(plate.plateNumber)] || settingsStale) return;
-    const startColumn =
-      Math.floor(well.column / replicates) * replicates;
-    if (startColumn + replicates > plate.columns) return;
-    const block = plate.wells.filter(
-      (candidate) =>
-        candidate.row === well.row &&
-        candidate.column >= startColumn &&
-        candidate.column < startColumn + replicates,
-    );
-    const occupied = block.find((candidate) => candidate.sample && candidate.gene);
-    setEditor({
-      plateIndex,
-      row: well.row,
-      startColumn,
-      mode: occupied ? "assay" : "empty",
-      sample: occupied?.sample ?? samples[0] ?? "",
-      gene: occupied?.gene ?? genes[0]?.name ?? "",
-    });
+    if (moveMode) {
+      moveSelectionTo(plateIndex, plate, well.wellId);
+      return;
+    }
+    const additive = event.metaKey || event.ctrlKey;
+    if (event.shiftKey && selectionAnchorId) {
+      const range = rectangularWellIds(
+        plate,
+        selectionAnchorId,
+        well.wellId,
+      );
+      setSelectedWellIds((current) =>
+        additive ? Array.from(new Set([...current, ...range])) : range,
+      );
+      return;
+    }
+    if (additive) {
+      setSelectedWellIds((current) =>
+        current.includes(well.wellId)
+          ? current.filter((wellId) => wellId !== well.wellId)
+          : [...current, well.wellId],
+      );
+      setSelectionAnchorId(well.wellId);
+      return;
+    }
+    setSelectedWellIds([well.wellId]);
+    setSelectionAnchorId(well.wellId);
   }
 
   function applyManualEdit() {
@@ -663,42 +848,112 @@ export function QpcrPlanner() {
     if (editor.mode === "assay" && (!editor.sample || !editor.gene)) {
       setToast({
         tone: "error",
-        message: "请选择样本和基因。 / Select a sample and an assay.",
+        message: tr("请选择样本和基因。", "Select a sample and an assay."),
       });
       return;
     }
     const next = clonePlan(layout);
     const plate = next.plates[editor.plateIndex];
     const selectedGene = genes.find((gene) => gene.name === editor.gene);
-    for (let offset = 0; offset < replicates; offset += 1) {
-      const column = editor.startColumn + offset;
-      const index = plate.wells.findIndex(
-        (well) => well.row === editor.row && well.column === column,
-      );
-      if (index < 0) continue;
-      plate.wells[index] = {
-        wellId: formatWellId(editor.row, column),
-        row: editor.row,
-        column,
+    next.plates[editor.plateIndex] = assignSelectedWells(
+      plate,
+      editor.wellIds,
+      {
         sample: editor.mode === "assay" ? editor.sample : null,
         gene: editor.mode === "assay" ? editor.gene : null,
         geneType:
           editor.mode === "assay"
             ? ((selectedGene?.role ?? "target") as GeneType)
             : null,
-        replicateIndex: editor.mode === "assay" ? offset + 1 : null,
-        source: "manual",
-      };
-    }
+      },
+    );
     commitLayout(next, plate.plateNumber);
     setEditor(null);
     setToast({
       tone: "neutral",
-      message: `${blockLabel(
-        editor.row,
-        editor.startColumn,
-        replicates,
-      )} 已按整组复孔更新；请查看下方即时校验。 / The full replicate block was updated; review live validation below.`,
+      message: tr(
+        `已更新 ${editor.wellIds.length} 个所选孔；布局校验仅作为提醒。`,
+        `Updated ${editor.wellIds.length} selected well(s); layout validation is advisory.`,
+      ),
+    });
+  }
+
+  function clearSelectedWells() {
+    if (!layout || !activePlate || selectedWellIds.length === 0) return;
+    const next = clonePlan(layout);
+    next.plates[activePlateIndex] = assignSelectedWells(
+      next.plates[activePlateIndex],
+      selectedWellIds,
+      { sample: null, gene: null, geneType: null },
+    );
+    commitLayout(next, activePlate.plateNumber);
+    setToast({
+      tone: "neutral",
+      message: tr(
+        `已清空 ${selectedWellIds.length} 个所选孔。`,
+        `Cleared ${selectedWellIds.length} selected well(s).`,
+      ),
+    });
+  }
+
+  function moveSelectionTo(
+    plateIndex: number,
+    plate: PlannerPlate,
+    destinationWellId: string,
+  ) {
+    if (!layout || selectedWellIds.length === 0) return;
+    let result = translateSelectedWells(
+      plate,
+      selectedWellIds,
+      destinationWellId,
+    );
+    if (result.ok === false && result.reason === "collision") {
+      const confirmedOverwrite = window.confirm(
+        tr(
+          `目标区域已有 ${result.collisionWellIds?.length ?? 0} 个占用孔。是否覆盖？`,
+          `The destination contains ${result.collisionWellIds?.length ?? 0} occupied well(s). Overwrite them?`,
+        ),
+      );
+      if (!confirmedOverwrite) {
+        setMoveMode(false);
+        return;
+      }
+      result = translateSelectedWells(
+        plate,
+        selectedWellIds,
+        destinationWellId,
+        true,
+      );
+    }
+    if (result.ok === false) {
+      setToast({
+        tone: "error",
+        message:
+          result.reason === "out-of-bounds"
+            ? tr(
+                "所选孔平移后会超出孔板边界。",
+                "The translated selection would exceed the plate boundary.",
+              )
+            : tr(
+                "所选区域没有可移动的检测孔。",
+                "The selection has no occupied wells to move.",
+              ),
+      });
+      setMoveMode(false);
+      return;
+    }
+    const next = clonePlan(layout);
+    next.plates[plateIndex] = result.plate;
+    commitLayout(next, plate.plateNumber);
+    setSelectedWellIds(result.movedWellIds);
+    setSelectionAnchorId(result.movedWellIds[0] ?? null);
+    setMoveMode(false);
+    setToast({
+      tone: "neutral",
+      message: tr(
+        `已平移 ${result.movedWellIds.length} 个孔位。`,
+        `Moved ${result.movedWellIds.length} well(s).`,
+      ),
     });
   }
 
@@ -709,12 +964,61 @@ export function QpcrPlanner() {
     );
     if (!source) return;
     const next = clonePlan(layout);
-    next.plates[activePlateIndex] = clonePlan(source);
+    next.plates[activePlateIndex] = {
+      ...clonePlan(source),
+      name: activePlate.name,
+    };
     commitLayout(next, activePlate.plateNumber);
+    setSelectedWellIds([]);
+    setSelectionAnchorId(null);
+    setMoveMode(false);
     setToast({
       tone: "success",
-      message: `Plate ${String(activePlate.plateNumber).padStart(2, "0")} 已恢复为自动布局。 / Automatic layout restored.`,
+      message: tr(
+        `${activePlate.name} 已恢复为自动布局。`,
+        `${activePlate.name} was restored to the automatic layout.`,
+      ),
     });
+  }
+
+  function commitPlateName() {
+    if (!layout || !activePlate) return;
+    const nextName = plateNameDraft.trim();
+    if (!nextName) {
+      setToast({
+        tone: "error",
+        message: tr("板名不能为空。", "Plate name cannot be empty."),
+      });
+      return;
+    }
+    const duplicate = layout.plates.some(
+      (plate) =>
+        plate.id !== activePlate.id &&
+        normalizedKey(plate.name) === normalizedKey(nextName),
+    );
+    if (duplicate) {
+      setToast({
+        tone: "error",
+        message: tr(
+          `板名“${nextName}”已存在；同一次生成的板名不能重复。`,
+          `Plate name “${nextName}” already exists; names must be unique within a plan.`,
+        ),
+      });
+      return;
+    }
+    if (nextName !== activePlate.name) {
+      const next = clonePlan(layout);
+      next.plates[activePlateIndex].name = nextName;
+      commitLayout(next, activePlate.plateNumber);
+      setToast({
+        tone: "success",
+        message: tr(
+          `板名已改为“${nextName}”。`,
+          `Plate renamed to “${nextName}”.`,
+        ),
+      });
+    }
+    setEditingPlateName(false);
   }
 
   function togglePlateConfirmation() {
@@ -728,31 +1032,35 @@ export function QpcrPlanner() {
     if (settingsStale) {
       setToast({
         tone: "error",
-        message:
-          "实验设置已变更，请重新生成布局。 / Experiment settings changed; regenerate the layout.",
-      });
-      return;
-    }
-    const plateIssues = issuesForPlate(activePlate);
-    if (plateIssues.length > 0) {
-      setToast({
-        tone: "error",
-        message:
-          plateIssues[0]?.message ??
-          "当前孔板未通过检查。 / This plate did not pass validation.",
+        message: tr(
+          "实验设置已变更，请重新生成布局。",
+          "Experiment settings changed; regenerate the layout.",
+        ),
       });
       return;
     }
     setConfirmed((current) => ({ ...current, [key]: true }));
     markChanged();
+    const advisoryCount =
+      issuesForPlate(activePlate).length + globalIssues.length;
     setToast({
-      tone: "success",
-      message: `Plate ${String(activePlate.plateNumber).padStart(2, "0")} 已通过检查并锁定。 / Plate validated and locked.`,
+      tone: advisoryCount > 0 ? "neutral" : "success",
+      message:
+        advisoryCount > 0
+          ? tr(
+              `${activePlate.name} 已确认；仍有 ${advisoryCount} 项布局提醒，但不限制导出。`,
+              `${activePlate.name} confirmed with ${advisoryCount} layout advisory item(s); export remains available.`,
+            )
+          : tr(
+              `${activePlate.name} 已确认并锁定。`,
+              `${activePlate.name} confirmed and locked.`,
+            ),
     });
   }
 
   function exportablePlate(plate: PlannerPlate): ExportablePlate {
     return {
+      name: plate.name,
       plateNumber: plate.plateNumber,
       rows: plate.rows,
       columns: plate.columns,
@@ -761,18 +1069,19 @@ export function QpcrPlanner() {
     };
   }
 
-  function exportContext(validationStatus?: "Valid" | "Invalid"): ExportContext {
+  function exportContext(validationStatus?: "Valid" | "Warning" | "Invalid"): ExportContext {
     return {
       plateType,
       replicates,
-      samples,
+      samples: sampleNames,
+      blankSamples: blankSampleNames,
       targetGenes,
       referenceGenes,
       strategyLabel: layout ? strategyLabel(layout.strategy) : "",
       generatedAt,
       validationStatus:
         validationStatus ??
-        (audit.valid && !settingsStale ? "Valid" : "Invalid"),
+        (settingsStale ? "Invalid" : audit.valid ? "Valid" : "Warning"),
       splitSamples: layout?.metrics.splitSamples ?? 0,
       repeatedReferenceBlocks:
         layout?.metrics.repeatedReferenceBlocks ?? 0,
@@ -783,37 +1092,42 @@ export function QpcrPlanner() {
   }
 
   async function downloadActivePlate() {
-    const plateValid = activePlate
-      ? !settingsStale && issuesForPlate(activePlate).length === 0
-      : false;
     if (
       !activePlate ||
       !activePlateConfirmed ||
-      !plateValid ||
+      settingsStale ||
       !reactionCalculation.valid
     ) {
       setToast({
         tone: "error",
         message:
           reactionCalculation.errors[0] ??
-          "请先完成校验并确认本板，再导出 Excel。 / Validate and confirm this plate before exporting.",
+          tr(
+            "请先确认本板，并确保反应体系体积有效后再导出。",
+            "Confirm this plate and ensure the reaction volumes are valid before export.",
+          ),
       });
       return;
     }
     try {
       await exportPlateExcel(
         exportablePlate(activePlate),
-        exportContext("Valid"),
+        exportContext(audit.valid ? "Valid" : "Warning"),
       );
       setToast({
         tone: "success",
-        message: `Plate ${String(activePlate.plateNumber).padStart(2, "0")} Excel 已生成。 / Excel generated.`,
+        message: tr(
+          `${activePlate.name} Excel 已生成。`,
+          `${activePlate.name} Excel workbook generated.`,
+        ),
       });
     } catch {
       setToast({
         tone: "error",
-        message:
-          "Excel 生成失败；当前方案仍已保留，请稍后重试。 / Excel generation failed; the plan remains saved.",
+        message: tr(
+          "Excel 生成失败；当前方案仍已保留，请稍后重试。",
+          "Excel generation failed; the plan remains saved.",
+        ),
       });
     }
   }
@@ -822,8 +1136,10 @@ export function QpcrPlanner() {
     if (!layout || !allConfirmed) {
       setToast({
         tone: "error",
-        message:
-          "请先确认全部孔板，再批量导出。 / Confirm every plate before batch export.",
+        message: tr(
+          "请先确认全部孔板，再批量导出。",
+          "Confirm every plate before batch export.",
+        ),
       });
       return;
     }
@@ -834,22 +1150,25 @@ export function QpcrPlanner() {
       );
       setToast({
         tone: "success",
-        message: `已打包 ${layout.plates.length} 个独立 Excel 和总览表。 / Packaged ${layout.plates.length} plate workbooks plus an overview.`,
+        message: tr(
+          `已打包 ${layout.plates.length} 个独立 Excel 和总览表。`,
+          `Packaged ${layout.plates.length} plate workbooks plus an overview.`,
+        ),
       });
     } catch {
       setToast({
         tone: "error",
-        message:
-          "批量导出失败；当前方案仍已保留，请稍后重试。 / Batch export failed; the plan remains saved.",
+        message: tr(
+          "批量导出失败；当前方案仍已保留，请稍后重试。",
+          "Batch export failed; the plan remains saved.",
+        ),
       });
     }
   }
 
   function issuesForPlate(plate: PlannerPlate) {
     return audit.errors.filter(
-      (issue) =>
-        issue.plateNumber === undefined ||
-        issue.plateNumber === plate.plateNumber,
+      (issue) => issue.plateNumber === plate.plateNumber,
     );
   }
 
@@ -880,13 +1199,25 @@ export function QpcrPlanner() {
       ?.focus();
   }
 
-  const activeIssues = activePlate ? issuesForPlate(activePlate) : [];
-  const activeInvalid = settingsStale || activeIssues.length > 0;
+  const globalIssues = audit.errors.filter(
+    (issue) => issue.plateNumber === undefined,
+  );
+  const activeIssues = activePlate
+    ? [...issuesForPlate(activePlate), ...globalIssues]
+    : globalIssues;
+  const activeInvalid = settingsStale;
   const currentStatus = plateStatus(
     activePlateConfirmed,
-    activeInvalid,
+    activeIssues.length,
     settingsStale,
+    language,
   );
+  const selectedOccupiedCount = activePlate
+    ? activePlate.wells.filter(
+        (well) =>
+          selectedWellIds.includes(well.wellId) && well.sample && well.gene,
+      ).length
+    : 0;
 
   return (
     <div className="app-shell">
@@ -897,27 +1228,56 @@ export function QpcrPlanner() {
           </div>
           <div className="brand-copy">
             <p className="brand-title">
-              RT-qPCR(SYBR Green)版布局规划工具
+              {tr(
+                "RT-qPCR(SYBR Green)板布局规划工具",
+                "RT-qPCR (SYBR Green) Plate Layout Planner",
+              )}
             </p>
-            <p className="brand-subtitle">
-              Plate Layout Planner · Local-first
-            </p>
+            <p className="brand-subtitle">RT-qPCR · SYBR Green</p>
           </div>
         </div>
         <div className="topbar-actions">
+          <div
+            className="language-switch"
+            role="group"
+            aria-label={tr("界面语言", "Interface language")}
+          >
+            <Languages size={14} aria-hidden="true" />
+            <button
+              type="button"
+              className={language === "zh" ? "active" : ""}
+              aria-pressed={language === "zh"}
+              onClick={() => setLanguage("zh")}
+            >
+              中文
+            </button>
+            <button
+              type="button"
+              className={language === "en" ? "active" : ""}
+              aria-pressed={language === "en"}
+              onClick={() => setLanguage("en")}
+            >
+              EN
+            </button>
+          </div>
           <span className={`save-status ${dirty ? "unsaved" : ""}`}>
             {dirty
-              ? "有未保存更改 / Unsaved"
-              : savedAt ||
-                (hydrated ? "本地就绪 / Local ready" : "载入中 / Loading")}
+              ? tr("有未保存更改", "Unsaved changes")
+              : savedAt === "restored"
+                ? tr("已恢复", "Restored")
+                : savedAt
+                  ? tr(`已保存 ${savedAt}`, `Saved ${savedAt}`)
+                  : hydrated
+                    ? tr("本地就绪", "Ready")
+                    : tr("载入中", "Loading")}
           </span>
           <button
             className="icon-button desktop-only"
             type="button"
             onClick={undoLayout}
             disabled={undoStack.length === 0}
-            aria-label="撤销手动编辑 / Undo manual edit"
-            title="撤销 / Undo（⌘/Ctrl + Z）"
+            aria-label={tr("撤销手动编辑", "Undo manual edit")}
+            title={tr("撤销（⌘/Ctrl + Z）", "Undo (⌘/Ctrl + Z)")}
           >
             <Undo2 size={16} />
           </button>
@@ -926,14 +1286,14 @@ export function QpcrPlanner() {
             type="button"
             onClick={redoLayout}
             disabled={redoStack.length === 0}
-            aria-label="恢复手动编辑 / Redo manual edit"
-            title="恢复 / Redo（⇧ + ⌘/Ctrl + Z）"
+            aria-label={tr("恢复手动编辑", "Redo manual edit")}
+            title={tr("恢复（⇧ + ⌘/Ctrl + Z）", "Redo (⇧ + ⌘/Ctrl + Z)")}
           >
             <Redo2 size={16} />
           </button>
           <button className="button" type="button" onClick={savePlanner}>
             <Save size={15} />
-            <span>保存 / Save</span>
+            <span>{tr("保存", "Save")}</span>
           </button>
           <button
             className="button button-primary"
@@ -942,13 +1302,16 @@ export function QpcrPlanner() {
             disabled={!allConfirmed}
             title={
               allConfirmed
-                ? "导出全部孔板 / Export all plates"
-                : "完成校验并确认全部孔板后可批量导出 / Validate and confirm all plates first"
+                ? tr("导出全部孔板", "Export all plates")
+                : tr(
+                    "确认全部孔板后可批量导出",
+                    "Confirm all plates before batch export",
+                  )
             }
           >
             <Download size={15} />
             <span>
-              全部导出 / Export all
+              {tr("全部导出", "Export all")}
               {layout ? `（${layout.plates.length}）` : ""}
             </span>
           </button>
@@ -956,15 +1319,20 @@ export function QpcrPlanner() {
       </header>
 
       <div className="workspace">
-        <aside className="sidebar" aria-label="实验设置 / Experiment setup">
+        <aside
+          className="sidebar"
+          aria-label={tr("实验设置", "Experiment setup")}
+        >
           <section className="panel">
             <div className="panel-heading">
               <div className="heading-with-index">
                 <span className="section-index">01</span>
                 <div>
-                  <h2 className="panel-title">选择孔板 / Plate format</h2>
+                  <h2 className="panel-title">
+                    {tr("选择孔板", "Plate format")}
+                  </h2>
                   <p className="panel-description">
-                    本次上机板型 / Select plate type
+                    {tr("选择本次上机板型", "Select the plate type")}
                   </p>
                 </div>
               </div>
@@ -988,10 +1356,13 @@ export function QpcrPlanner() {
                   >
                     <span>
                       <span className="plate-choice-name">
-                        {type} 孔板 / {type}-well
+                        {tr(`${type} 孔板`, `${type}-well plate`)}
                       </span>
                       <span className="plate-choice-meta">
-                        {size.rows} 行 / rows × {size.columns} 列 / columns
+                        {tr(
+                          `${size.rows} 行 × ${size.columns} 列`,
+                          `${size.rows} rows × ${size.columns} columns`,
+                        )}
                       </span>
                     </span>
                     <span className="plate-mini" aria-hidden="true">
@@ -1010,22 +1381,27 @@ export function QpcrPlanner() {
               <div className="heading-with-index">
                 <span className="section-index">02</span>
                 <div>
-                  <h2 className="panel-title">添加样本 / Samples</h2>
+                  <h2 className="panel-title">
+                    {tr("添加样本", "Samples")}
+                  </h2>
                   <p className="panel-description">
-                    逐个输入或从 Excel 粘贴 / Add or paste
+                    {tr(
+                      "逐个输入或从 Excel 粘贴",
+                      "Add individually or paste from Excel",
+                    )}
                   </p>
                 </div>
               </div>
               {samples.length > 0 && (
                 <button
-                  className="button button-quiet"
+                  className="button button-clear"
                   type="button"
                   onClick={() => {
                     setSamples([]);
                     markChanged();
                   }}
                 >
-                  清空 / Clear
+                  {tr("清空", "Clear")}
                 </button>
               )}
             </div>
@@ -1035,13 +1411,13 @@ export function QpcrPlanner() {
                   className="input"
                   value={sampleInput}
                   onChange={(event) => setSampleInput(event.target.value)}
-                  placeholder="如 / e.g. Tumor_01"
-                  aria-label="样本名称 / Sample name"
+                  placeholder={tr("如 Tumor_01", "e.g. Tumor_01")}
+                  aria-label={tr("样本名称", "Sample name")}
                 />
                 <button
                   className="icon-button"
                   type="submit"
-                  aria-label="添加样本 / Add sample"
+                  aria-label={tr("添加样本", "Add sample")}
                   disabled={!sampleInput.trim()}
                 >
                   <Plus size={16} />
@@ -1049,7 +1425,9 @@ export function QpcrPlanner() {
               </form>
               <details className="batch-disclosure">
                 <summary>
-                  <span>从 Excel 批量粘贴 / Paste from Excel</span>
+                  <span>
+                    {tr("从 Excel 批量粘贴", "Paste from Excel")}
+                  </span>
                   <FileSpreadsheet size={14} />
                 </summary>
                 <div className="batch-content">
@@ -1057,10 +1435,11 @@ export function QpcrPlanner() {
                     className="batch-box"
                     value={samplePaste}
                     onChange={(event) => setSamplePaste(event.target.value)}
-                    placeholder={
-                      "复制一列或多列样本名称 / Copy one or more columns\n粘贴到这里 / Paste here"
-                    }
-                    aria-label="批量粘贴样本 / Paste samples in bulk"
+                    placeholder={tr(
+                      "复制一列或多列样本名称\n粘贴到这里",
+                      "Copy one or more columns of sample names\nPaste here",
+                    )}
+                    aria-label={tr("批量粘贴样本", "Paste samples in bulk")}
                   />
                   <button
                     className="button button-soft"
@@ -1071,38 +1450,85 @@ export function QpcrPlanner() {
                       setSamplePaste("");
                     }}
                   >
-                    导入 / Import{" "}
-                    {parseExcelNames(samplePaste).length || ""} 个名称 / names
+                    {tr("导入", "Import")}{" "}
+                    {parseExcelNames(samplePaste).length || ""}{" "}
+                    {tr("个名称", "names")}
                   </button>
                 </div>
               </details>
               {samples.length > 0 ? (
                 <div
-                  className="chip-list"
-                  aria-label="已添加样本 / Added samples"
+                  className="sample-list"
+                  aria-label={tr("已添加样本", "Added samples")}
                 >
                   {samples.map((sample) => (
-                    <span className="chip" key={sample} title={sample}>
-                      <span className="chip-label">{sample}</span>
-                      <button
-                        className="chip-remove"
-                        type="button"
-                        onClick={() => {
-                          setSamples((current) =>
-                            current.filter((item) => item !== sample),
-                          );
-                          markChanged();
-                        }}
-                        aria-label={`删除样本 / Remove sample ${sample}`}
-                      >
-                        <X size={11} />
-                      </button>
-                    </span>
+                    <div
+                      className={`sample-row ${
+                        sample.kind === "blank" ? "is-blank" : ""
+                      }`}
+                      key={sample.id}
+                    >
+                      <span className="sample-name" title={sample.name}>
+                        {sample.name}
+                      </span>
+                      <div className="sample-row-actions">
+                        <button
+                          className={`role-toggle sample-kind-toggle ${
+                            sample.kind === "blank" ? "blank" : ""
+                          }`}
+                          type="button"
+                          onClick={() => {
+                            setSamples((current) =>
+                              current.map((item) =>
+                                item.id === sample.id
+                                  ? {
+                                      ...item,
+                                      kind:
+                                        item.kind === "sample"
+                                          ? "blank"
+                                          : "sample",
+                                    }
+                                  : item,
+                              ),
+                            );
+                            markChanged();
+                          }}
+                          aria-label={tr(
+                            `将 ${sample.name} 切换为${
+                              sample.kind === "sample" ? "Blank" : "样本"
+                            }`,
+                            `Change ${sample.name} to ${
+                              sample.kind === "sample" ? "Blank" : "Sample"
+                            }`,
+                          )}
+                        >
+                          {sample.kind === "blank"
+                            ? "Blank"
+                            : tr("样本", "Sample")}
+                        </button>
+                        <button
+                          className="chip-remove"
+                          type="button"
+                          onClick={() => {
+                            setSamples((current) =>
+                              current.filter((item) => item.id !== sample.id),
+                            );
+                            markChanged();
+                          }}
+                          aria-label={tr(
+                            `删除样本 ${sample.name}`,
+                            `Remove sample ${sample.name}`,
+                          )}
+                        >
+                          <X size={11} />
+                        </button>
+                      </div>
+                    </div>
                   ))}
                 </div>
               ) : (
                 <p className="microcopy">
-                  尚未添加样本 / No samples added.
+                  {tr("尚未添加样本", "No samples added")}
                 </p>
               )}
             </div>
@@ -1114,23 +1540,26 @@ export function QpcrPlanner() {
                 <span className="section-index">03</span>
                 <div>
                   <h2 className="panel-title">
-                    添加检测基因 / Assays
+                    {tr("添加检测基因", "Assays")}
                   </h2>
                   <p className="panel-description">
-                    切换目的/内参 / Toggle target/reference
+                    {tr(
+                      "点击切换目的基因或内参",
+                      "Toggle target or reference",
+                    )}
                   </p>
                 </div>
               </div>
               {genes.length > 0 && (
                 <button
-                  className="button button-quiet"
+                  className="button button-clear"
                   type="button"
                   onClick={() => {
                     setGenes([]);
                     markChanged();
                   }}
                 >
-                  清空 / Clear
+                  {tr("清空", "Clear")}
                 </button>
               )}
             </div>
@@ -1140,13 +1569,13 @@ export function QpcrPlanner() {
                   className="input"
                   value={geneInput}
                   onChange={(event) => setGeneInput(event.target.value)}
-                  placeholder="如 / e.g. GAPDH"
-                  aria-label="基因名称 / Assay name"
+                  placeholder={tr("如 GAPDH", "e.g. GAPDH")}
+                  aria-label={tr("基因名称", "Assay name")}
                 />
                 <button
                   className="icon-button"
                   type="submit"
-                  aria-label="添加基因 / Add assay"
+                  aria-label={tr("添加基因", "Add assay")}
                   disabled={!geneInput.trim()}
                 >
                   <Plus size={16} />
@@ -1154,7 +1583,9 @@ export function QpcrPlanner() {
               </form>
               <details className="batch-disclosure">
                 <summary>
-                  <span>从 Excel 批量粘贴 / Paste from Excel</span>
+                  <span>
+                    {tr("从 Excel 批量粘贴", "Paste from Excel")}
+                  </span>
                   <FileSpreadsheet size={14} />
                 </summary>
                 <div className="batch-content">
@@ -1162,10 +1593,11 @@ export function QpcrPlanner() {
                     className="batch-box"
                     value={genePaste}
                     onChange={(event) => setGenePaste(event.target.value)}
-                    placeholder={
-                      "复制一列或多列基因名称 / Copy one or more columns\n粘贴到这里 / Paste here"
-                    }
-                    aria-label="批量粘贴基因 / Paste assays in bulk"
+                    placeholder={tr(
+                      "复制一列或多列基因名称\n粘贴到这里",
+                      "Copy one or more columns of assay names\nPaste here",
+                    )}
+                    aria-label={tr("批量粘贴基因", "Paste assays in bulk")}
                   />
                   <button
                     className="button button-soft"
@@ -1176,15 +1608,16 @@ export function QpcrPlanner() {
                       setGenePaste("");
                     }}
                   >
-                    导入 / Import{" "}
-                    {parseExcelNames(genePaste).length || ""} 个名称 / names
+                    {tr("导入", "Import")}{" "}
+                    {parseExcelNames(genePaste).length || ""}{" "}
+                    {tr("个名称", "names")}
                   </button>
                 </div>
               </details>
               {genes.length > 0 ? (
                 <div
                   className="gene-list"
-                  aria-label="已添加基因 / Added assays"
+                  aria-label={tr("已添加基因", "Added assays")}
                 >
                   {genes.map((gene) => (
                     <div className="gene-row" key={gene.id}>
@@ -1213,13 +1646,18 @@ export function QpcrPlanner() {
                             );
                             markChanged();
                           }}
-                          aria-label={`将 / Change ${gene.name} to ${
-                            gene.role === "target" ? "内参" : "目的"
-                          }基因 / ${gene.role === "target" ? "reference" : "target"}`}
+                          aria-label={tr(
+                            `将 ${gene.name} 切换为${
+                              gene.role === "target" ? "内参" : "目的基因"
+                            }`,
+                            `Change ${gene.name} to ${
+                              gene.role === "target" ? "reference" : "target"
+                            }`,
+                          )}
                         >
                           {gene.role === "reference"
-                            ? "内参 / Reference"
-                            : "目的 / Target"}
+                            ? tr("内参", "Reference")
+                            : tr("目的", "Target")}
                         </button>
                         <button
                           className="chip-remove"
@@ -1230,7 +1668,10 @@ export function QpcrPlanner() {
                             );
                             markChanged();
                           }}
-                          aria-label={`删除基因 / Remove assay ${gene.name}`}
+                          aria-label={tr(
+                            `删除基因 ${gene.name}`,
+                            `Remove assay ${gene.name}`,
+                          )}
                         >
                           <X size={11} />
                         </button>
@@ -1240,16 +1681,17 @@ export function QpcrPlanner() {
                 </div>
               ) : (
                 <p className="microcopy">
-                  尚未添加检测基因 / No assays added.
+                  {tr("尚未添加检测基因", "No assays added")}
                 </p>
               )}
               {referenceGenes.length === 0 && (
                 <div className="notice notice-warning">
                   <AlertTriangle size={15} />
                   <span>
-                    尚未设置内参；请至少将 1 个基因标记为“内参”，数量不限。 /
-                    No reference assay selected; mark at least one assay as a
-                    reference. Multiple references are supported.
+                    {tr(
+                      "尚未设置内参；请至少将 1 个基因标记为“内参”，数量不限。",
+                      "No reference selected. Mark at least one assay as a reference; multiple references are supported.",
+                    )}
                   </span>
                 </div>
               )}
@@ -1262,10 +1704,13 @@ export function QpcrPlanner() {
                 <span className="section-index">04</span>
                 <div>
                   <h2 className="panel-title">
-                    技术复孔 / Technical replicates
+                    {tr("技术复孔", "Technical replicates")}
                   </h2>
                   <p className="panel-description">
-                    横向连续且不跨行 / Left-to-right, no row wrap
+                    {tr(
+                      "同行从左到右连续",
+                      "Contiguous left-to-right within a row",
+                    )}
                   </p>
                 </div>
               </div>
@@ -1278,7 +1723,7 @@ export function QpcrPlanner() {
                     setReplicates((value) => Math.max(1, value - 1));
                     markChanged();
                   }}
-                  aria-label="减少复孔数 / Decrease replicates"
+                  aria-label={tr("减少复孔数", "Decrease replicates")}
                 >
                   <Minus size={14} />
                 </button>
@@ -1291,7 +1736,7 @@ export function QpcrPlanner() {
                     setReplicates(Number(event.target.value));
                     markChanged();
                   }}
-                  aria-label="技术复孔数 / Technical replicate count"
+                  aria-label={tr("技术复孔数", "Technical replicate count")}
                 />
                 <button
                   type="button"
@@ -1301,27 +1746,34 @@ export function QpcrPlanner() {
                     );
                     markChanged();
                   }}
-                  aria-label="增加复孔数 / Increase replicates"
+                  aria-label={tr("增加复孔数", "Increase replicates")}
                 >
                   <Plus size={14} />
                 </button>
               </div>
               <span className="microcopy">
-                例如 / e.g. 3 replicates: A1–A3；下一组从 A4 开始
+                {tr(
+                  "例如 3 复孔：A1–A3；下一组从 A4 开始",
+                  "Example, 3 replicates: A1–A3; the next block starts at A4",
+                )}
               </span>
             </div>
             <div className="setup-summary">
               <strong>
-                {samples.length} 样本 / samples × {genes.length} 基因 /
-                assays × {replicates || 0} 复孔 / replicates
+                {tr(
+                  `${samples.length} 样本 × ${genes.length} 基因 × ${
+                    replicates || 0
+                  } 复孔`,
+                  `${samples.length} samples × ${genes.length} assays × ${
+                    replicates || 0
+                  } replicates`,
+                )}
               </strong>
               <span>
-                基础反应孔 {reactionWells} 个（未计跨板内参重做）·
-                单样本若全部基因同板需 {sampleFullRunWells} 孔 ·{" "}
-                {referenceGenes.length} 个内参 / Base wells {reactionWells}
-                (before cross-plate reference reruns) · {sampleFullRunWells}
-                wells if all assays for one sample share a plate ·{" "}
-                {referenceGenes.length} reference assay(s)
+                {tr(
+                  `基础反应孔 ${reactionWells} 个（未计跨板内参重做）· 单样本全部基因需 ${sampleFullRunWells} 孔 · ${referenceGenes.length} 个内参`,
+                  `${reactionWells} base wells before cross-plate reference reruns · ${sampleFullRunWells} wells per complete sample assay set · ${referenceGenes.length} reference assay(s)`,
+                )}
               </span>
             </div>
             {inputIssues.length > 0 && (
@@ -1337,7 +1789,7 @@ export function QpcrPlanner() {
               disabled={inputIssues.length > 0}
             >
               <Sparkles size={16} />
-              生成推荐布局 / Generate layout
+              {tr("生成推荐布局", "Generate layout")}
             </button>
           </section>
         </aside>
@@ -1347,48 +1799,65 @@ export function QpcrPlanner() {
             <div>
               <p className="eyebrow">
                 <ShieldCheck size={13} />
-                qPCR 规则感知排板 / qPCR-aware layout engine
+                {tr("版布局预览", "Layout preview")}
               </p>
               <h1 className="hero-title" id="planner-title">
                 {layout
-                  ? `已生成 ${layout.plates.length} 块可核对实验板 / ${layout.plates.length} review-ready plates.`
-                  : "把 RT-qPCR 排板变成可核对的实验设计 / A review-ready plate plan."}
+                  ? tr(
+                      `已生成 ${layout.plates.length} 块实验板`,
+                      `${layout.plates.length} plate(s) generated`,
+                    )
+                  : tr(
+                      "先设置样本、基因与复孔",
+                      "Set samples, assays, and replicates",
+                    )}
               </h1>
               <p className="hero-copy">
-                优先减少板数；任何含某样本目的基因的孔板，都必须包含该样本的全部内参；技术复孔横向连续。 /
-                Minimize plates first; every plate containing a sample&apos;s
-                target assay(s) must also contain all references for that
-                sample; keep replicates contiguous left-to-right.
+                {tr(
+                  "按样本顺序从上到下、从左到右排布；复孔同行横向连续。某样本的目的基因若延续到下一板，该板会重新安排该样本的全部内参。",
+                  "Arrange samples top-to-bottom, then left-to-right; keep replicates contiguous within a row. If a sample continues onto another plate, all of its references are rerun on that plate.",
+                )}
               </p>
             </div>
-            <div className="summary-grid" aria-label="布局摘要">
+            <div
+              className="summary-grid"
+              aria-label={tr("布局摘要", "Layout summary")}
+            >
               <div className="metric">
                 <span className="metric-label">
-                  预计孔板 / Plates
+                  {tr("预计孔板", "Plates")}
                 </span>
                 <strong className="metric-value">
                   {layout ? layout.metrics.plateCount : "—"}
                 </strong>
                 <span className="metric-detail">
-                  {layout ? `${plateType}-well` : "等待输入 / Waiting"}
+                  {layout
+                    ? tr(`${plateType} 孔板`, `${plateType}-well`)
+                    : tr("等待输入", "Waiting")}
                 </span>
               </div>
               <div className="metric">
                 <span className="metric-label">
-                  反应孔 / Reactions
+                  {tr("反应孔", "Reactions")}
                 </span>
                 <strong className="metric-value">
                   {layout ? layout.metrics.usedWells : reactionWells || "—"}
                 </strong>
                 <span className="metric-detail">
                   {layout
-                    ? `含跨板重做内参 ${layout.metrics.repeatedReferenceWells} 孔 / ${layout.metrics.repeatedReferenceWells} rerun reference wells`
-                    : "生成后计入跨板重做内参 / Reruns added after planning"}
+                    ? tr(
+                        `含跨板重做内参 ${layout.metrics.repeatedReferenceWells} 孔`,
+                        `${layout.metrics.repeatedReferenceWells} rerun reference wells included`,
+                      )
+                    : tr(
+                        "生成后计入跨板重做内参",
+                        "Reference reruns are counted after planning",
+                      )}
                 </span>
               </div>
               <div className="metric">
                 <span className="metric-label">
-                  利用率 / Utilization
+                  {tr("利用率", "Utilization")}
                 </span>
                 <strong className="metric-value">
                   {layout
@@ -1397,24 +1866,43 @@ export function QpcrPlanner() {
                 </strong>
                 <span className="metric-detail">
                   {layout
-                    ? `${layout.metrics.emptyWells} 个空孔 / empty wells`
+                    ? tr(
+                        `${layout.metrics.emptyWells} 个空孔`,
+                        `${layout.metrics.emptyWells} empty wells`,
+                      )
                     : "—"}
                 </span>
               </div>
               <div className="metric">
                 <span className="metric-label">
-                  推荐策略 / Strategy
+                  {tr("推荐策略", "Strategy")}
                 </span>
                 <strong className="metric-value" style={{ fontSize: 17 }}>
-                  {layout ? strategyLabel(layout.strategy) : "—"}
+                  {layout
+                    ? layout.strategy === "sample-major"
+                      ? tr("按样本", "Sample-major")
+                      : layout.strategy === "gene-major"
+                        ? tr("按基因", "Assay-major")
+                        : tr("混合", "Hybrid")
+                    : "—"}
                 </strong>
                 <span className="metric-detail">
                   {layout
-                    ? `样本切换 ${layout.metrics.sampleSwitches} · 引物切换 ${layout.metrics.primerSwitches} / sample · assay switches`
-                    : "比较三种板内顺序 / Comparing three orders"}
+                    ? tr(
+                        `样本切换 ${layout.metrics.sampleSwitches} 次 · 引物切换 ${layout.metrics.primerSwitches} 次`,
+                        `${layout.metrics.sampleSwitches} sample switches · ${layout.metrics.primerSwitches} assay switches`,
+                      )
+                    : tr("等待生成", "Waiting")}
                 </span>
               </div>
-              {layout && <p className="rationale">{layout.reason}</p>}
+              {layout && (
+                <p className="rationale">
+                  {tr(
+                    "自动布局优先减少板数，并按样本顺序纵向填充检测块；空余孔位会保留。",
+                    "The automatic plan minimizes plate count, fills assay blocks vertically in sample order, and leaves any unused wells empty.",
+                  )}
+                </p>
+              )}
             </div>
           </section>
 
@@ -1426,10 +1914,12 @@ export function QpcrPlanner() {
                     <span className="ghost-well" key={index} />
                   ))}
                 </div>
-                <h2>先添加样本和检测基因 / Add samples and assays</h2>
+                <h2>{tr("先添加样本和检测基因", "Add samples and assays")}</h2>
                 <p>
-                  系统会计算孔板数、比较板内操作顺序，并生成可点击编辑的布局。 /
-                  The planner compares layouts and creates editable plates.
+                  {tr(
+                    "系统会计算孔板数，并生成可点选、移动和编辑的布局。",
+                    "The planner calculates plate count and creates a selectable, movable, editable layout.",
+                  )}
                 </p>
                 <button
                   className="button button-soft"
@@ -1438,7 +1928,7 @@ export function QpcrPlanner() {
                   style={{ marginTop: 18 }}
                 >
                   <Beaker size={15} />
-                  载入示例 / Load example
+                  {tr("载入示例", "Load example")}
                 </button>
               </div>
             </section>
@@ -1448,16 +1938,19 @@ export function QpcrPlanner() {
                 <div className="notice notice-error" style={{ marginBottom: 12 }}>
                   <AlertTriangle size={16} />
                   <span>
-                    实验设置已在生成后发生改变。当前布局仍保留用于对照，但必须重新生成后才能确认和导出。 /
-                    Settings changed after generation; regenerate before
-                    confirmation or export.
+                    {tr(
+                      "实验设置已在生成后改变。当前布局仍保留用于对照，但需重新生成后才能确认和导出。",
+                      "Experiment settings changed after generation. The current layout is retained for reference; regenerate it before confirmation or export.",
+                    )}
                   </span>
                 </div>
               )}
 
-              <nav className="plate-nav" aria-label="孔板列表 / Plate list">
+              <nav
+                className="plate-nav"
+                aria-label={tr("孔板列表", "Plate list")}
+              >
                 {layout.plates.map((plate, index) => {
-                  const issues = issuesForPlate(plate);
                   const isConfirmed = Boolean(
                     confirmed[String(plate.plateNumber)],
                   );
@@ -1468,25 +1961,35 @@ export function QpcrPlanner() {
                       }`}
                       type="button"
                       key={plate.id}
-                      onClick={() => setActivePlateIndex(index)}
+                      onClick={() => {
+                        setActivePlateIndex(index);
+                        setSelectedWellIds([]);
+                        setSelectionAnchorId(null);
+                        setMoveMode(false);
+                        setEditingPlateName(false);
+                      }}
                       aria-current={activePlateIndex === index ? "page" : undefined}
                     >
                       <span>
                         <span className="plate-tab-title">
-                          Plate {String(plate.plateNumber).padStart(2, "0")}
+                          {plate.name}
                         </span>
                         <span className="plate-tab-meta">
-                          {plate.sampleNames.length} 样本 / samples ·{" "}
+                          {tr(
+                            `${plate.sampleNames.length} 样本`,
+                            `${plate.sampleNames.length} samples`,
+                          )}{" "}
+                          ·{" "}
                           {
                             plate.wells.filter((well) => well.sample && well.gene)
                               .length
                           }{" "}
-                          孔 / wells
+                          {tr("孔", "wells")}
                         </span>
                       </span>
                       <span
                         className={`plate-tab-state ${
-                          settingsStale || issues.length > 0
+                          settingsStale
                             ? "invalid"
                             : isConfirmed
                               ? "confirmed"
@@ -1504,10 +2007,46 @@ export function QpcrPlanner() {
                   <section className="plate-card">
                   <div className="plate-card-heading">
                     <div>
-                      <div className="entry-row">
-                        <h2 className="plate-title">
-                          Plate {String(activePlate.plateNumber).padStart(2, "0")}
-                        </h2>
+                      <div className="plate-title-row">
+                        {editingPlateName ? (
+                          <input
+                            className="plate-name-input"
+                            value={plateNameDraft}
+                            autoFocus
+                            maxLength={80}
+                            aria-label={tr("编辑板名", "Edit plate name")}
+                            onChange={(event) =>
+                              setPlateNameDraft(event.target.value)
+                            }
+                            onBlur={commitPlateName}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") {
+                                event.preventDefault();
+                                commitPlateName();
+                              }
+                              if (event.key === "Escape") {
+                                setEditingPlateName(false);
+                                setPlateNameDraft(activePlate.name);
+                              }
+                            }}
+                          />
+                        ) : (
+                          <button
+                            className="plate-name-button"
+                            type="button"
+                            disabled={activePlateConfirmed}
+                            onClick={() => {
+                              setPlateNameDraft(activePlate.name);
+                              setEditingPlateName(true);
+                            }}
+                            title={tr("修改板名", "Rename plate")}
+                          >
+                            <span className="plate-title">
+                              {activePlate.name}
+                            </span>
+                            <Pencil size={13} aria-hidden="true" />
+                          </button>
+                        )}
                         <span
                           className={`status-pill ${currentStatus.className}`}
                         >
@@ -1518,13 +2057,24 @@ export function QpcrPlanner() {
                         </span>
                       </div>
                       <p className="plate-subtitle">
-                        {plateType}-well · 已使用 / Used{" "}
-                        {
-                          activePlate.wells.filter(
-                            (well) => well.sample && well.gene,
-                          ).length
-                        }{" "}
-                        / {plateType} · {activePlate.sampleNames.join("、")}
+                        {tr(
+                          `板号 ${String(activePlate.plateNumber).padStart(
+                            2,
+                            "0",
+                          )} · ${plateType} 孔 · 已使用 ${
+                            activePlate.wells.filter(
+                              (well) => well.sample && well.gene,
+                            ).length
+                          } / ${plateType} · ${activePlate.sampleNames.join("、")}`,
+                          `Plate ID ${String(activePlate.plateNumber).padStart(
+                            2,
+                            "0",
+                          )} · ${plateType}-well · ${
+                            activePlate.wells.filter(
+                              (well) => well.sample && well.gene,
+                            ).length
+                          } / ${plateType} used · ${activePlate.sampleNames.join(", ")}`,
+                        )}
                       </p>
                     </div>
                     <div className="plate-actions">
@@ -1533,8 +2083,8 @@ export function QpcrPlanner() {
                         type="button"
                         onClick={undoLayout}
                         disabled={undoStack.length === 0}
-                        title="撤销 / Undo"
-                        aria-label="撤销 / Undo"
+                        title={tr("撤销", "Undo")}
+                        aria-label={tr("撤销", "Undo")}
                       >
                         <Undo2 size={15} />
                       </button>
@@ -1543,8 +2093,8 @@ export function QpcrPlanner() {
                         type="button"
                         onClick={redoLayout}
                         disabled={redoStack.length === 0}
-                        title="恢复 / Redo"
-                        aria-label="恢复 / Redo"
+                        title={tr("恢复", "Redo")}
+                        aria-label={tr("恢复", "Redo")}
                       >
                         <Redo2 size={15} />
                       </button>
@@ -1560,7 +2110,7 @@ export function QpcrPlanner() {
                         }
                       >
                         <RotateCcw size={14} />
-                        恢复 / Restore
+                        {tr("恢复自动布局", "Restore")}
                       </button>
                       <button
                         className={`button ${
@@ -1571,8 +2121,8 @@ export function QpcrPlanner() {
                       >
                         <ShieldCheck size={14} />
                         {activePlateConfirmed
-                          ? "解除确认 / Unlock"
-                          : "确认本板 / Confirm"}
+                          ? tr("解除确认", "Unlock")
+                          : tr("确认本板", "Confirm")}
                       </button>
                       <button
                         className="button button-primary"
@@ -1580,13 +2130,12 @@ export function QpcrPlanner() {
                         onClick={downloadActivePlate}
                         disabled={
                           !activePlateConfirmed ||
-                          activeIssues.length > 0 ||
                           !reactionCalculation.valid ||
                           settingsStale
                         }
                       >
                         <Download size={14} />
-                        导出 / Export Excel
+                        {tr("导出 Excel", "Export Excel")}
                       </button>
                     </div>
                   </div>
@@ -1594,7 +2143,7 @@ export function QpcrPlanner() {
                   <div className="plate-context">
                     <div
                       className="legend"
-                      aria-label="颜色图例 / Color legend"
+                      aria-label={tr("颜色图例", "Color legend")}
                     >
                       {genes.map((gene) => {
                         const color =
@@ -1614,7 +2163,7 @@ export function QpcrPlanner() {
                             <span>
                               {gene.name}
                               {gene.role === "reference"
-                                ? " · 内参 / Reference"
+                                ? tr(" · 内参", " · Reference")
                                 : ""}
                             </span>
                           </span>
@@ -1622,27 +2171,117 @@ export function QpcrPlanner() {
                       })}
                       <span className="legend-item">
                         <span className="legend-dot manual" />
-                        <span>手动修改 / Manual</span>
+                        <span>{tr("手动修改", "Manual")}</span>
                       </span>
+                      {blankSampleNames.length > 0 && (
+                        <span className="legend-item">
+                          <span className="legend-dot blank" />
+                          <span>Blank</span>
+                        </span>
+                      )}
                     </div>
-                      <span className="plate-hint">
-                      点击孔位编辑整组 {replicates} 复孔 / Click a well to edit
-                      its full replicate block
+                    <span className="plate-hint">
+                      {tr(
+                        "单击选择 · Shift 连选 · Ctrl/⌘ 多选 · 双击编辑",
+                        "Click to select · Shift range · Ctrl/⌘ multi-select · Double-click to edit",
+                      )}
                     </span>
+                  </div>
+
+                  <div className="selection-toolbar" aria-live="polite">
+                    <span>
+                      {selectedWellIds.length > 0
+                        ? tr(
+                            `已选 ${selectedWellIds.length} 孔（其中 ${selectedOccupiedCount} 个检测孔）`,
+                            `${selectedWellIds.length} selected (${selectedOccupiedCount} occupied)`,
+                          )
+                        : tr(
+                            "选择一个或多个孔后可编辑或平移",
+                            "Select one or more wells to edit or move",
+                          )}
+                    </span>
+                    <div className="selection-actions">
+                      <button
+                        className="button button-quiet"
+                        type="button"
+                        disabled={
+                          selectedWellIds.length === 0 ||
+                          activePlateConfirmed ||
+                          settingsStale
+                        }
+                        onClick={() =>
+                          openEditorForSelection(
+                            activePlateIndex,
+                            activePlate,
+                            selectedWellIds,
+                          )
+                        }
+                      >
+                        <Pencil size={13} />
+                        {tr("编辑", "Edit")}
+                      </button>
+                      <button
+                        className={`button button-quiet ${
+                          moveMode ? "active" : ""
+                        }`}
+                        type="button"
+                        disabled={
+                          selectedOccupiedCount === 0 ||
+                          activePlateConfirmed ||
+                          settingsStale
+                        }
+                        onClick={() => setMoveMode((current) => !current)}
+                      >
+                        <Move size={13} />
+                        {moveMode
+                          ? tr("点选目标孔", "Choose destination")
+                          : tr("平移", "Move")}
+                      </button>
+                      <button
+                        className="button button-clear"
+                        type="button"
+                        disabled={
+                          selectedWellIds.length === 0 ||
+                          activePlateConfirmed ||
+                          settingsStale
+                        }
+                        onClick={clearSelectedWells}
+                      >
+                        <Trash2 size={13} />
+                        {tr("清空孔", "Clear wells")}
+                      </button>
+                      {selectedWellIds.length > 0 && (
+                        <button
+                          className="icon-button"
+                          type="button"
+                          onClick={() => {
+                            setSelectedWellIds([]);
+                            setSelectionAnchorId(null);
+                            setMoveMode(false);
+                          }}
+                          aria-label={tr("取消选择", "Clear selection")}
+                        >
+                          <X size={14} />
+                        </button>
+                      )}
+                    </div>
                   </div>
 
                   <div className="plate-scroll">
                     <div
                       className={`plate-grid ${
                         plateType === 384 ? "plate-384" : ""
-                      }`}
+                      } ${moveMode ? "move-mode" : ""}`}
                       style={
                         {
                           "--plate-columns": activePlate.columns,
                         } as CSSProperties
                       }
                       role="grid"
-                      aria-label={`Plate ${activePlate.plateNumber} 孔板布局 / plate layout`}
+                      aria-label={tr(
+                        `${activePlate.name} 孔板布局`,
+                        `${activePlate.name} plate layout`,
+                      )}
                     >
                       <span className="grid-corner" aria-hidden="true" />
                       {Array.from({ length: activePlate.columns }).map(
@@ -1668,44 +2307,55 @@ export function QpcrPlanner() {
                             .filter((well) => well.row === row)
                             .sort((left, right) => left.column - right.column)
                             .map((well) => {
-                              const usableColumns =
-                                Math.floor(activePlate.columns / replicates) *
-                                replicates;
-                              const reserved = well.column >= usableColumns;
                               const empty = !well.sample || !well.gene;
                               const manual = well.source === "manual";
+                              const selected = selectedWellIds.includes(
+                                well.wellId,
+                              );
+                              const blank = Boolean(
+                                well.sample && blankSampleSet.has(well.sample),
+                              );
                               const wellClass = [
                                 "well",
                                 well.geneType === "reference"
                                   ? "well-reference"
                                   : "",
                                 empty ? "well-empty" : "",
-                                reserved ? "well-unused" : "",
+                                blank ? "well-blank" : "",
                                 manual ? "well-manual" : "",
+                                selected ? "well-selected" : "",
                               ]
                                 .filter(Boolean)
                                 .join(" ");
-                              const description = reserved
-                                ? `${well.wellId}，行尾保留孔，当前复孔数下不可作为起始块 / reserved row-tail well`
-                                : empty
-                                  ? `${well.wellId}，空孔${
+                              const description = empty
+                                ? tr(
+                                    `${well.wellId}，空孔${
                                       manual ? "，手动修改" : ""
-                                    } / empty well${manual ? ", manually edited" : ""}`
-                                  : `${well.wellId}，样本 ${well.sample}，基因 ${
-                                      well.gene
-                                    }，${
+                                    }`,
+                                    `${well.wellId}, empty${
+                                      manual ? ", manually edited" : ""
+                                    }`,
+                                  )
+                                : tr(
+                                    `${well.wellId}，${
+                                      blank ? "Blank" : "样本"
+                                    } ${well.sample}，基因 ${well.gene}，${
                                       well.geneType === "reference"
-                                        ? "内参基因"
+                                        ? "内参"
                                         : "目的基因"
-                                    }，第 ${well.replicateIndex} 个复孔${
+                                    }，复孔 ${well.replicateIndex ?? "—"}${
                                       manual ? "，手动修改" : ""
-                                    } / sample ${well.sample}, assay ${well.gene}, ${
+                                    }`,
+                                    `${well.wellId}, ${
+                                      blank ? "Blank" : "sample"
+                                    } ${well.sample}, assay ${well.gene}, ${
                                       well.geneType === "reference"
                                         ? "reference"
                                         : "target"
-                                    }, replicate ${well.replicateIndex}${
+                                    }, replicate ${well.replicateIndex ?? "—"}${
                                       manual ? ", manually edited" : ""
-                                    }`;
+                                    }`,
+                                  );
                               return (
                                 <button
                                   id={`plate-${activePlate.plateNumber}-well-${well.row}-${well.column}`}
@@ -1716,18 +2366,24 @@ export function QpcrPlanner() {
                                   key={well.wellId}
                                   title={description}
                                   aria-label={description}
-                                  disabled={
-                                    reserved ||
-                                    activePlateConfirmed ||
-                                    settingsStale
-                                  }
-                                  onClick={() =>
-                                    openEditor(
+                                  disabled={activePlateConfirmed || settingsStale}
+                                  onClick={(event) =>
+                                    handleWellSelection(
+                                      event,
                                       activePlateIndex,
                                       activePlate,
                                       well,
                                     )
                                   }
+                                  onDoubleClick={() => {
+                                    setSelectedWellIds([well.wellId]);
+                                    setSelectionAnchorId(well.wellId);
+                                    openEditorForSelection(
+                                      activePlateIndex,
+                                      activePlate,
+                                      [well.wellId],
+                                    );
+                                  }}
                                   onKeyDown={(event) =>
                                     moveWellFocus(
                                       event,
@@ -1766,11 +2422,15 @@ export function QpcrPlanner() {
 
                   <div
                     className={`validation-bar ${
-                      activeInvalid ? "invalid" : ""
+                      activeInvalid
+                        ? "invalid"
+                        : activeIssues.length > 0
+                          ? "warning"
+                          : ""
                     }`}
                     role="status"
                   >
-                    {activeInvalid ? (
+                    {activeInvalid || activeIssues.length > 0 ? (
                       <AlertTriangle size={15} />
                     ) : (
                       <Check size={15} />
@@ -1778,29 +2438,33 @@ export function QpcrPlanner() {
                     <div>
                       {settingsStale ? (
                         <strong>
-                          实验设置已变更，请重新生成布局。 / Settings changed;
-                          regenerate the layout.
+                          {tr(
+                            "实验设置已变更，请重新生成布局。",
+                            "Settings changed; regenerate the layout.",
+                          )}
                         </strong>
                       ) : activeIssues.length > 0 ? (
                         <>
                           <strong>
-                            本板有 {activeIssues.length} 项需要修复，确认与导出已暂停。 /
-                            {activeIssues.length} issue(s) must be fixed before
-                            confirmation or export.
+                            {tr(
+                              `当前有 ${activeIssues.length} 项布局提醒；不会限制确认、保存或导出。`,
+                              `${activeIssues.length} layout advisory item(s); confirmation, saving, and export remain available.`,
+                            )}
                           </strong>
                           <ul className="validation-list">
                             {activeIssues.slice(0, 3).map((issue, index) => (
                               <li key={`${issue.code}-${index}`}>
-                                {issue.message}
+                                {localizeMessage(issue.message)}
                               </li>
                             ))}
                           </ul>
                         </>
                       ) : (
                         <strong>
-                          每板内参完整，跨板样本已重做全部内参，复孔横向连续。 /
-                          References complete on every plate; replicates are
-                          contiguous.
+                          {tr(
+                            "自动布局核查通过；仍请在上机前人工确认。",
+                            "Automatic layout checks passed; verify the plate before the run.",
+                          )}
                         </strong>
                       )}
                     </div>
@@ -1814,6 +2478,7 @@ export function QpcrPlanner() {
                       role: gene.role,
                     }))}
                     value={reactionSystem}
+                    language={language}
                     onChange={(nextValue) => {
                       setReactionSystem(nextValue);
                       markChanged();
@@ -1825,14 +2490,11 @@ export function QpcrPlanner() {
               <div className="method-note">
                 <Info size={16} />
                 <div>
-                  <strong>方法边界 / Method boundary</strong>
-                  排板在可行候选中比较板数、跨板内参重做、引物批次和板内切换；反应用量按实际占用孔计算。本工具不自动添加
-                  NTC、no-RT、阳性模板或板间校准样本，请按试剂说明书与本地 SOP
-                  核对。 / Feasible layouts are ranked by plate count,
-                  reference reruns, assay batching, and within-plate switches.
-                  Reagent totals use occupied wells. NTC, no-RT, positive
-                  template controls, and inter-plate calibrators are not added
-                  automatically.
+                  <strong>{tr("特别说明", "Special note")}</strong>
+                  {tr(
+                    "手动调整可能打破推荐的复孔或内参结构；系统会显示提醒，但不限制保存、确认或导出。请在上机前按本地 SOP 人工核对。NTC、no-RT、阳性模板和板间校准样本不会自动添加。",
+                    "Manual edits may break the recommended replicate or reference structure. The planner shows advisory messages without blocking save, confirmation, or export. Verify the final plate against the local SOP before the run. NTC, no-RT, positive-template controls, and inter-plate calibrators are not added automatically.",
+                  )}
                 </div>
               </div>
             </>
@@ -1840,11 +2502,16 @@ export function QpcrPlanner() {
 
           <div className="footer-note">
             <span>
-              仅供科研使用（RUO）· Research use only · 请核对本地 SOP
+              {tr(
+                "仅供科研使用（RUO）· 请核对本地 SOP",
+                "Research use only (RUO) · Verify against the local SOP",
+              )}
             </span>
             <span>
-              浏览器本地处理 / Local browser processing · 不上传样本名称 /
-              Sample names are not uploaded
+              {tr(
+                "浏览器本地处理 · 不上传样本名称",
+                "Processed in the browser · Sample names are not uploaded",
+              )}
             </span>
           </div>
         </main>
@@ -1867,19 +2534,23 @@ export function QpcrPlanner() {
             <div className="modal-heading">
               <div>
                 <h2 className="modal-title" id="edit-title">
-                  编辑复孔组 / Edit replicate block{" "}
-                  {blockLabel(editor.row, editor.startColumn, replicates)}
+                  {tr(
+                    `编辑所选 ${editor.wellIds.length} 个孔`,
+                    `Edit ${editor.wellIds.length} selected well(s)`,
+                  )}
                 </h2>
                 <p className="modal-description">
-                  修改应用到本组 {replicates} 个横向连续孔，并标记为手动编辑。 /
-                  Changes apply to the full contiguous block.
+                  {tr(
+                    "只修改当前选中的孔，并用紫色轮廓标记。",
+                    "Only the selected wells are changed and marked with a purple outline.",
+                  )}
                 </p>
               </div>
               <button
                 className="icon-button modal-close"
                 type="button"
                 onClick={() => setEditor(null)}
-                aria-label="关闭编辑 / Close editor"
+                aria-label={tr("关闭编辑", "Close editor")}
               >
                 <X size={16} />
               </button>
@@ -1887,7 +2558,7 @@ export function QpcrPlanner() {
             <div className="modal-form">
               <div className="field">
                 <span className="field-label">
-                  孔位状态 / Well status
+                  {tr("孔位状态", "Well status")}
                 </span>
                 <div className="segmented">
                   <button
@@ -1899,7 +2570,7 @@ export function QpcrPlanner() {
                       )
                     }
                   >
-                    检测孔 / Assay
+                    {tr("检测孔", "Assay")}
                   </button>
                   <button
                     className={editor.mode === "empty" ? "active" : ""}
@@ -1910,14 +2581,16 @@ export function QpcrPlanner() {
                       )
                     }
                   >
-                    空孔 / Empty
+                    {tr("空孔", "Empty")}
                   </button>
                 </div>
               </div>
               {editor.mode === "assay" && (
                 <>
                   <label className="field">
-                    <span className="field-label">样本 / Sample</span>
+                    <span className="field-label">
+                      {tr("样本", "Sample")}
+                    </span>
                     <select
                       className="select"
                       value={editor.sample}
@@ -1930,14 +2603,17 @@ export function QpcrPlanner() {
                       }
                     >
                       {samples.map((sample) => (
-                        <option value={sample} key={sample}>
-                          {sample}
+                        <option value={sample.name} key={sample.id}>
+                          {sample.name}
+                          {sample.kind === "blank" ? " · Blank" : ""}
                         </option>
                       ))}
                     </select>
                   </label>
                   <label className="field">
-                    <span className="field-label">基因 / Assay</span>
+                    <span className="field-label">
+                      {tr("基因", "Assay")}
+                    </span>
                     <select
                       className="select"
                       value={editor.gene}
@@ -1953,8 +2629,8 @@ export function QpcrPlanner() {
                         <option value={gene.name} key={gene.id}>
                           {gene.name} ·{" "}
                           {gene.role === "reference"
-                            ? "内参 / Reference"
-                            : "目的 / Target"}
+                            ? tr("内参", "Reference")
+                            : tr("目的", "Target")}
                         </option>
                       ))}
                     </select>
@@ -1963,38 +2639,35 @@ export function QpcrPlanner() {
               )}
               <div className="notice">
                 <Layers3 size={15} />
-                  <span>
-                  手动修改可以保存为草稿。若造成跨板样本缺少内参、反应重复或遗漏，系统会暂停确认与导出，直到修复。 /
-                  Manual edits can be saved as a draft; confirmation and
-                  export pause until missing references, duplicates, or
-                  omissions are fixed.
-                  </span>
+                <span>
+                  {tr(
+                    "手动修改可自由保存和导出。若出现内参缺失、重复或遗漏，系统只显示提醒，请自行核对。",
+                    "Manual edits can be saved and exported freely. Missing references, duplicates, or omissions are shown as advisory messages for review.",
+                  )}
+                </span>
               </div>
             </div>
             <div className="modal-actions">
-              {editor.mode === "empty" && (
-                <button
-                  className="button button-danger"
-                  type="button"
-                  onClick={applyManualEdit}
-                >
-                  <Trash2 size={14} />
-                  清空整组 / Clear block
-                </button>
-              )}
               <button
                 className="button button-quiet"
                 type="button"
                 onClick={() => setEditor(null)}
               >
-                取消 / Cancel
+                {tr("取消", "Cancel")}
               </button>
               <button
-                className="button button-primary"
+                className={
+                  editor.mode === "empty"
+                    ? "button button-danger"
+                    : "button button-primary"
+                }
                 type="button"
                 onClick={applyManualEdit}
               >
-                应用修改 / Apply
+                {editor.mode === "empty" && <Trash2 size={14} />}
+                {editor.mode === "empty"
+                  ? tr("清空所选孔", "Clear selected")
+                  : tr("应用修改", "Apply")}
               </button>
             </div>
           </section>
