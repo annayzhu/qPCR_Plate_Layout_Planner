@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  INTERLEAVED_384_ROW_ORDER,
   PlatePlannerError,
   planPlateLayout,
   refreshPlanDerivedData,
@@ -128,6 +129,292 @@ test("places gene-major blocks by assay while preserving sample order", () => {
   const refreshed = refreshPlanDerivedData(result, input);
   assert.equal(refreshed.metrics.sampleSwitches, 5);
   assert.equal(refreshed.metrics.primerSwitches, 2);
+});
+
+test("96-well layouts normalize the 384-only interleaved option to sequential", () => {
+  const input = {
+    plateType: 96 as const,
+    samples: ["S1", "S2"],
+    targetGenes: ["G1", "G2"],
+    referenceGenes: ["R1"],
+    replicates: 3,
+  };
+  const sequential = planPlateLayout(input, {
+    strategy: "gene-major",
+    loadingPattern: "sequential",
+  });
+  const requestedInterleaved = planPlateLayout(input, {
+    strategy: "gene-major",
+    loadingPattern: "interleaved-8-channel",
+  });
+
+  assert.equal(requestedInterleaved.loadingPattern, "sequential");
+  assert.deepEqual(requestedInterleaved, sequential);
+});
+
+test("384-well sequential loading retains natural A-to-P row traversal", () => {
+  const input = {
+    plateType: 384 as const,
+    samples: ["S1", "S2"],
+    targetGenes: ["G1"],
+    referenceGenes: ["R1"],
+    replicates: 3,
+  };
+  const result = planPlateLayout(input, {
+    strategy: "gene-major",
+    loadingPattern: "sequential",
+  });
+  const firstReplicates = result.plates[0].wells
+    .filter((well) => well.replicateIndex === 1)
+    .sort((left, right) => left.row - right.row)
+    .map((well) => `${well.wellId}:${well.sample}/${well.gene}`);
+
+  assert.equal(result.loadingPattern, "sequential");
+  assert.deepEqual(firstReplicates, [
+    "A1:S1/R1",
+    "B1:S2/R1",
+    "C1:S1/G1",
+    "D1:S2/G1",
+  ]);
+  assert.equal(validateLayout(result, input).valid, true);
+});
+
+test("384-well planning defaults to the interleaved assay-major workflow", () => {
+  const result = planPlateLayout({
+    plateType: 384,
+    samples: ["S1", "S2"],
+    targetGenes: ["G1"],
+    referenceGenes: ["R1"],
+    replicates: 3,
+  });
+
+  assert.equal(result.loadingPattern, "interleaved-8-channel");
+  assert.equal(result.strategy, "gene-major");
+  assert.equal(
+    result.plates[0].wells.find(
+      (well) =>
+        well.sample === "S2" &&
+        well.gene === "R1" &&
+        well.replicateIndex === 1,
+    )?.wellId,
+    "C1",
+  );
+});
+
+test("384-well interleaved gene layout follows both 8-channel passes and starts each assay in a new column block", () => {
+  const samples = Array.from(
+    { length: 16 },
+    (_, index) => `S${index + 1}`,
+  );
+  const input = {
+    plateType: 384 as const,
+    samples,
+    targetGenes: ["G1", "G2"],
+    referenceGenes: ["R1"],
+    replicates: 3,
+  };
+  const result = planPlateLayout(input, {
+    strategy: "gene-major",
+    loadingPattern: "interleaved-8-channel",
+  });
+  const plate = result.plates[0];
+  const expectedRows = [
+    0, 2, 4, 6, 8, 10, 12, 14, 1, 3, 5, 7, 9, 11, 13, 15,
+  ];
+
+  assert.equal(result.loadingPattern, "interleaved-8-channel");
+  for (const [gene, startColumn] of [
+    ["R1", 0],
+    ["G1", 3],
+    ["G2", 6],
+  ] as const) {
+    const firstReplicates = samples.map((sample) => {
+      const well = plate.wells.find(
+        (item) =>
+          item.sample === sample &&
+          item.gene === gene &&
+          item.replicateIndex === 1,
+      );
+      assert.ok(well);
+      return well;
+    });
+    assert.deepEqual(
+      firstReplicates.map((well) => well.row),
+      expectedRows,
+    );
+    assert.deepEqual(
+      firstReplicates.map((well) => well.column),
+      Array(samples.length).fill(startColumn),
+    );
+  }
+  assert.equal(validateLayout(result, input).valid, true);
+});
+
+test("384-well interleaved gene capacity includes structural 16-row padding", () => {
+  const input = {
+    plateType: 384 as const,
+    samples: Array.from(
+      { length: 20 },
+      (_, index) => `S${index + 1}`,
+    ),
+    targetGenes: ["G1", "G2", "G3", "G4"],
+    referenceGenes: ["R1"],
+    replicates: 3,
+  };
+  const result = planPlateLayout(input, {
+    strategy: "gene-major",
+    loadingPattern: "interleaved-8-channel",
+  });
+
+  assert.equal(result.plates.length, 2);
+  assert.deepEqual(
+    result.plates.map((plate) => plate.sampleNames.length),
+    [16, 4],
+  );
+  assert.equal(result.metrics.splitSamples, 0);
+  assert.equal(result.metrics.usedWells, 300);
+  assert.equal(result.metrics.emptyWells, 468);
+  assert.equal(result.metrics.structuralEmptyWells, 468);
+  assert.ok(
+    result.plates.every((plate) =>
+      plate.wells
+        .filter((well) => well.sample && well.gene)
+        .every((well) => well.column < 24),
+    ),
+  );
+  assert.equal(validateLayout(result, input).valid, true);
+});
+
+test("384-well interleaved gene splits rerun every reference on each involved plate", () => {
+  const input = {
+    plateType: 384 as const,
+    samples: ["S1"],
+    targetGenes: Array.from(
+      { length: 10 },
+      (_, index) => `G${index + 1}`,
+    ),
+    referenceGenes: ["R1"],
+    replicates: 3,
+  };
+  const result = planPlateLayout(input, {
+    strategy: "gene-major",
+    loadingPattern: "interleaved-8-channel",
+  });
+
+  assert.equal(result.plates.length, 2);
+  assert.equal(result.metrics.splitSamples, 1);
+  assert.equal(result.metrics.repeatedReferenceBlocks, 1);
+  assert.equal(result.metrics.repeatedReferenceWells, 3);
+  assert.equal(result.metrics.usedWells, 36);
+  for (const plate of result.plates) {
+    assert.equal(
+      plate.wells.filter(
+        (well) => well.sample === "S1" && well.gene === "R1",
+      ).length,
+      3,
+    );
+  }
+  assert.equal(validateLayout(result, input).valid, true);
+});
+
+test("384-well interleaved layouts preserve every global sample slot across assays and plates", () => {
+  const samples = Array.from(
+    { length: 17 },
+    (_, index) => `S${index + 1}`,
+  );
+  const input = {
+    plateType: 384 as const,
+    samples,
+    targetGenes: Array.from(
+      { length: 8 },
+      (_, index) => `G${index + 1}`,
+    ),
+    referenceGenes: ["R1"],
+    replicates: 3,
+  };
+  const result = planPlateLayout(input, {
+    strategy: "gene-major",
+    loadingPattern: "interleaved-8-channel",
+  });
+
+  samples.forEach((sample, globalIndex) => {
+    const expectedRow =
+      INTERLEAVED_384_ROW_ORDER[globalIndex % 16];
+    const firstReplicates = result.plates.flatMap((plate) =>
+      plate.wells.filter(
+        (well) =>
+          well.sample === sample && well.replicateIndex === 1,
+      ),
+    );
+    assert.ok(firstReplicates.length > 0);
+    assert.deepEqual(
+      new Set(firstReplicates.map((well) => well.row)),
+      new Set([expectedRow]),
+    );
+
+    const targetPlateNumbers = result.plates
+      .filter((plate) =>
+        plate.wells.some(
+          (well) =>
+            well.sample === sample && well.geneType === "target",
+        ),
+      )
+      .map((plate) => plate.plateNumber);
+    assert.ok(targetPlateNumbers.length > 1);
+  });
+  assert.equal(validateLayout(result, input).valid, true);
+});
+
+test("384-well interleaved global-slot invariant survives deterministic fuzz cases", () => {
+  let state = 0x3848cafe;
+  const nextInteger = (maximum: number) => {
+    state = (state * 1664525 + 1013904223) >>> 0;
+    return state % maximum;
+  };
+
+  for (let caseIndex = 0; caseIndex < 24; caseIndex += 1) {
+    const sampleCount = 1 + nextInteger(40);
+    const targetCount = 1 + nextInteger(12);
+    const referenceCount = 1 + nextInteger(2);
+    const replicates = 1 + nextInteger(6);
+    const samples = Array.from(
+      { length: sampleCount },
+      (_, index) => `C${caseIndex + 1}_S${index + 1}`,
+    );
+    const input = {
+      plateType: 384 as const,
+      samples,
+      targetGenes: Array.from(
+        { length: targetCount },
+        (_, index) => `T${index + 1}`,
+      ),
+      referenceGenes: Array.from(
+        { length: referenceCount },
+        (_, index) => `R${index + 1}`,
+      ),
+      replicates,
+    };
+    const result = planPlateLayout(input, {
+      strategy: "gene-major",
+      loadingPattern: "interleaved-8-channel",
+    });
+
+    assert.equal(validateLayout(result, input).valid, true);
+    samples.forEach((sample, globalIndex) => {
+      const expectedRow =
+        INTERLEAVED_384_ROW_ORDER[globalIndex % 16];
+      const assignedRows = result.plates.flatMap((plate) =>
+        plate.wells
+          .filter(
+            (well) =>
+              well.sample === sample && well.replicateIndex === 1,
+          )
+          .map((well) => well.row),
+      );
+      assert.ok(assignedRows.length > 0);
+      assert.ok(assignedRows.every((row) => row === expectedRow));
+    });
+  }
 });
 
 test("sample and gene presets keep the same plate and reference requirements", () => {

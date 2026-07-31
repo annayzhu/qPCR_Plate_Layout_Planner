@@ -212,6 +212,10 @@ RT-qPCR (SYBR Green) Plate Layout Planner | Offline Portable Edition
 重要说明 / Notes
 - 核心排板、反应用量计算和 Excel 导出均可离线使用。
   Layout planning, reaction calculations, and Excel export work offline.
+- 384 孔板默认使用固定 9 mm 八道排枪隔行路径：先 A/C/E/G/I/K/M/O，再 B/D/F/H/J/L/N/P；使用 4.5 mm、自动化或单道设备时可切换为连续孔位。
+  The 384-well default follows a fixed 9 mm 8-channel route: A/C/E/G/I/K/M/O, then B/D/F/H/J/L/N/P. Select sequential loading for 4.5 mm, automated, or single-channel workflows.
+- 隔行模式假设样本源板按输入顺序从 A–H 向下放置，再移到下一列。
+  Interleaved mode assumes the source plate follows the sample input order down A–H, then advances to the next column.
 - Thermo Fisher 与 Bio-Rad 的来源链接需要联网时才能打开，不影响其他功能。
   The Thermo Fisher and Bio-Rad source links require internet access; all other features remain available offline.
 - “保存”使用当前电脑、当前浏览器的本地存储。更换浏览器、移动或重命名 HTML 后，原先保存的草稿可能不会自动出现。

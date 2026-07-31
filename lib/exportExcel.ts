@@ -1,6 +1,10 @@
 "use client";
 
 import type { ReactionSystemInput } from "./reactionCalculator";
+import type {
+  LayoutStrategy,
+  LoadingPattern,
+} from "./platePlanner";
 
 export type GeneType = "target" | "reference";
 export type LayoutSource = "auto" | "manual";
@@ -28,6 +32,9 @@ export interface ExportablePlate {
 
 export interface ExportContext {
   plateType: 96 | 384;
+  /** Physical loading route used to place samples into the destination plate. */
+  loadingPattern?: LoadingPattern;
+  layoutStrategy?: LayoutStrategy;
   replicates: number;
   samples: string[];
   targetGenes: string[];
@@ -147,6 +154,90 @@ function wellFill(well: ExportableWell, context: ExportContext) {
 
 function roundedVolume(value: number) {
   return Math.round((value + Number.EPSILON) * 1000) / 1000;
+}
+
+function loadingPatternLabel(context: ExportContext) {
+  return context.plateType === 384 &&
+    context.loadingPattern === "interleaved-8-channel"
+    ? "固定 9 mm 八道排枪隔行 / Interleaved rows (fixed 9 mm 8-channel)"
+    : "连续孔位 / Sequential wells";
+}
+
+function hasFixedSourcePlateMapping(context: ExportContext) {
+  return (
+    context.plateType === 384 &&
+    context.loadingPattern === "interleaved-8-channel" &&
+    (context.layoutStrategy === "gene-major" ||
+      (context.layoutStrategy === undefined &&
+        /按基因|By assay/iu.test(context.strategyLabel)))
+  );
+}
+
+function sourcePlateMappingLabel(context: ExportContext) {
+  if (
+    context.plateType !== 384 ||
+    context.loadingPattern !== "interleaved-8-channel"
+  ) {
+    return "不适用 / Not applicable";
+  }
+  if (!hasFixedSourcePlateMapping(context)) {
+    return "按样本排列不生成可直接执行的固定 A–H 来源板映射，请人工规划。 / Sample-major layout does not provide a direct fixed A–H source-plate map; plan it manually.";
+  }
+  return "样本按输入顺序每 8 个组成一个来源八道组；同一样本在所有基因中保持同一 A–H 来源行。手动修改孔需复核。 / Every 8 input-order samples form one source group; each sample keeps the same A–H source row across assays. Review manual wells.";
+}
+
+function wellLoadingMetadata(
+  well: ExportableWell,
+  context: ExportContext,
+) {
+  if (!well.sample || !well.gene) {
+    return {
+      transferPass: "",
+      sourceRow: "",
+      sampleGroup: "",
+    };
+  }
+
+  if (
+    context.plateType !== 384 ||
+    context.loadingPattern !== "interleaved-8-channel"
+  ) {
+    return {
+      transferPass: "连续 / Sequential",
+      sourceRow: "",
+      sampleGroup: "",
+    };
+  }
+
+  const sampleIndex = context.samples.indexOf(well.sample);
+  const positionWithinBand =
+    sampleIndex >= 0 ? sampleIndex % 16 : -1;
+  const expectedDestinationRow =
+    positionWithinBand < 0
+      ? -1
+      : positionWithinBand < 8
+        ? positionWithinBand * 2
+        : (positionWithinBand - 8) * 2 + 1;
+  const mappingNeedsReview =
+    !hasFixedSourcePlateMapping(context) ||
+    well.source === "manual" ||
+    sampleIndex < 0 ||
+    well.row !== expectedDestinationRow;
+
+  if (mappingNeedsReview) {
+    return {
+      transferPass: `第 ${(well.row % 2) + 1} 次 / Pass ${(well.row % 2) + 1}`,
+      sourceRow: "手动复核 / Review manual",
+      sampleGroup: "手动规划 / Manual planning",
+    };
+  }
+
+  const transferPass = positionWithinBand < 8 ? 1 : 2;
+  return {
+    transferPass: `第 ${transferPass} 次 / Pass ${transferPass}`,
+    sourceRow: rowLabel(sampleIndex % 8),
+    sampleGroup: Math.floor(sampleIndex / 8) + 1,
+  };
 }
 
 function appendReactionSheets(
@@ -607,28 +698,35 @@ export async function buildPlateWorkbook(
   const detailRows = plate.wells
     .slice()
     .sort((a, b) => a.row - b.row || a.column - b.column)
-    .map((well) => ({
-      "孔板名称 / Plate name": plateName(plate),
-      "孔板编号 / Plate number": plate.plateNumber,
-      "孔位 / Well": well.wellId,
-      "行 / Row": rowLabel(well.row),
-      "列 / Column": well.column + 1,
-      "样本 / Sample": well.sample ?? "",
-      "基因 / Assay": well.gene ?? "",
-      "类型 / Assay type":
-        well.geneType === "reference"
-          ? "内参 / Reference"
-          : well.geneType === "target"
-            ? "目的 / Target"
-            : "",
-      "复孔序号 / Replicate": well.replicateIndex ?? "",
-      "布局来源 / Layout source":
-        well.source === "manual" ? "手动 / Manual" : "自动 / Auto",
-      "校验状态 / Validation": context.validationStatus,
-    }));
+    .map((well) => {
+      const loadingMetadata = wellLoadingMetadata(well, context);
+      return {
+        "孔板名称 / Plate name": plateName(plate),
+        "孔板编号 / Plate number": plate.plateNumber,
+        "孔位 / Well": well.wellId,
+        "行 / Row": rowLabel(well.row),
+        "列 / Column": well.column + 1,
+        "样本 / Sample": well.sample ?? "",
+        "基因 / Assay": well.gene ?? "",
+        "类型 / Assay type":
+          well.geneType === "reference"
+            ? "内参 / Reference"
+            : well.geneType === "target"
+              ? "目的 / Target"
+              : "",
+        "复孔序号 / Replicate": well.replicateIndex ?? "",
+        "上样批次 / Transfer pass": loadingMetadata.transferPass,
+        "来源行 / Source row (A-H)": loadingMetadata.sourceRow,
+        "八道样本组 / 8-channel sample group":
+          loadingMetadata.sampleGroup,
+        "布局来源 / Layout source":
+          well.source === "manual" ? "手动 / Manual" : "自动 / Auto",
+        "校验状态 / Validation": context.validationStatus,
+      };
+    });
   const detailSheet = XLSX.utils.json_to_sheet(detailRows);
   detailSheet["!autofilter"] = {
-    ref: `A1:K${Math.max(2, detailRows.length + 1)}`,
+    ref: `A1:N${Math.max(2, detailRows.length + 1)}`,
   };
   detailSheet["!cols"] = [
     { wch: 24 },
@@ -640,6 +738,9 @@ export async function buildPlateWorkbook(
     { wch: 18 },
     { wch: 14 },
     { wch: 16 },
+    { wch: 20 },
+    { wch: 22 },
+    { wch: 32 },
     { wch: 15 },
     { wch: 18 },
   ];
@@ -649,6 +750,14 @@ export async function buildPlateWorkbook(
     ["孔板名称 / Plate name", plateName(plate)],
     ["孔板编号 / Plate number", plate.plateNumber],
     ["孔板规格 / Plate format", `${context.plateType} 孔 / wells`],
+    ["上样方式 / Loading pattern", loadingPatternLabel(context)],
+    [
+      "上样行序 / Loading row order",
+      context.plateType === 384 &&
+      context.loadingPattern === "interleaved-8-channel"
+        ? "第 1 次 A/C/E/G/I/K/M/O；第 2 次 B/D/F/H/J/L/N/P / Pass 1 A/C/E/G/I/K/M/O; Pass 2 B/D/F/H/J/L/N/P"
+        : `${context.plateType === 384 ? "A–P" : "A–H"} 连续物理行序 / Sequential physical row order`,
+    ],
     ["技术复孔 / Technical replicates", context.replicates],
     ["实验总样本数 / Total samples", context.samples.length],
     ["实验目的基因数 / Target assays", context.targetGenes.length],
@@ -675,6 +784,10 @@ export async function buildPlateWorkbook(
     ],
     ["重复内参孔 / Rerun reference wells", context.repeatedReferenceWells],
     ["排布策略 / Layout strategy", context.strategyLabel],
+    [
+      "来源板映射 / Source-plate mapping",
+      sourcePlateMappingLabel(context),
+    ],
     [
       "复孔方向 / Replicate direction",
       "从左向右连续，不跨行 / Contiguous left-to-right, no row wrap",
@@ -766,6 +879,7 @@ export async function exportAllPlateExcels(
     return {
       "孔板名称 / Plate name": plateName(plate),
       "孔板编号 / Plate number": plate.plateNumber,
+      "上样方式 / Loading pattern": loadingPatternLabel(context),
       "本板样本数 / Samples on plate": samplesOnPlate.size,
       "已用孔 / Used wells": used,
       "目的基因孔 / Target wells": occupied.filter(

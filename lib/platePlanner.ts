@@ -3,9 +3,11 @@ export type GeneType = "target" | "reference";
 export type LayoutSource = "auto" | "manual";
 export type LayoutStrategy = "sample-major" | "gene-major" | "hybrid";
 export type LayoutPreset = Exclude<LayoutStrategy, "hybrid">;
+export type LoadingPattern = "sequential" | "interleaved-8-channel";
 
 export interface PlanOptions {
   strategy?: LayoutPreset;
+  loadingPattern?: LoadingPattern;
 }
 
 export interface PlanInput {
@@ -57,6 +59,7 @@ export interface PlanMetrics {
 export interface PlanResult {
   plates: PlannerPlate[];
   strategy: LayoutStrategy;
+  loadingPattern: LoadingPattern;
   metrics: PlanMetrics;
   reason: string;
 }
@@ -87,6 +90,8 @@ interface TargetPair {
 interface PackedPlate {
   samples: Map<string, Set<string>>;
 }
+
+type SampleIndexMap = ReadonlyMap<string, number>;
 
 interface LayoutCandidate {
   strategy: LayoutStrategy;
@@ -119,6 +124,41 @@ export function getPlateDimensions(plateType: PlateType) {
     "E_PLATE_TYPE",
     "仅支持 96 孔板或 384 孔板。 / Only 96- and 384-well plates are supported.",
   );
+}
+
+export const INTERLEAVED_384_ROW_ORDER = [
+  0, 2, 4, 6, 8, 10, 12, 14, 1, 3, 5, 7, 9, 11, 13, 15,
+] as const;
+
+function resolveLoadingPattern(
+  plateType: PlateType,
+  requested?: LoadingPattern,
+): LoadingPattern {
+  if (plateType === 96) return "sequential";
+  return requested === "sequential"
+    ? "sequential"
+    : "interleaved-8-channel";
+}
+
+function loadingRowOrder(rows: number, loadingPattern: LoadingPattern) {
+  if (rows === 16 && loadingPattern === "interleaved-8-channel") {
+    return [...INTERLEAVED_384_ROW_ORDER];
+  }
+  return Array.from({ length: rows }, (_, index) => index);
+}
+
+function sampleGlobalIndex(
+  sample: string,
+  sampleIndices: SampleIndexMap,
+) {
+  const index = sampleIndices.get(sample);
+  if (index === undefined) {
+    throw new PlatePlannerError(
+      "E_INTERNAL_SAMPLE_INDEX",
+      `样本“${sample}”缺少全局孔位索引。 / The sample is missing its global loading-slot index.`,
+    );
+  }
+  return index;
 }
 
 export function formatWellId(row: number, column: number) {
@@ -322,6 +362,185 @@ function packWholeSamples(
   return plates;
 }
 
+function geneBandLoad(
+  plate: PackedPlate,
+  referenceCount: number,
+  rows: number,
+  sampleIndices: SampleIndexMap,
+) {
+  if (plate.samples.size === 0) return 0;
+
+  const referenceBands = new Set<number>();
+  const targetBands = new Map<string, Set<number>>();
+  for (const [sample, targets] of plate.samples) {
+    const globalBand = Math.floor(
+      sampleGlobalIndex(sample, sampleIndices) / rows,
+    );
+    referenceBands.add(globalBand);
+    for (const gene of targets) {
+      const bands = targetBands.get(gene) ?? new Set<number>();
+      bands.add(globalBand);
+      targetBands.set(gene, bands);
+    }
+  }
+
+  const referenceBandCount = referenceCount * referenceBands.size;
+  const targetBandCount = Array.from(targetBands.values()).reduce(
+    (sum, bands) => sum + bands.size,
+    0,
+  );
+  return referenceBandCount + targetBandCount;
+}
+
+function copyPackedPlate(plate: PackedPlate) {
+  return {
+    samples: new Map(
+      Array.from(plate.samples, ([sample, targets]) => [
+        sample,
+        new Set(targets),
+      ]),
+    ),
+  };
+}
+
+function geneBandLoadAfterPair(
+  plate: PackedPlate,
+  pair: TargetPair,
+  referenceCount: number,
+  rows: number,
+  sampleIndices: SampleIndexMap,
+) {
+  const hypothetical = copyPackedPlate(plate);
+  addTargetPair(hypothetical, pair);
+  return geneBandLoad(
+    hypothetical,
+    referenceCount,
+    rows,
+    sampleIndices,
+  );
+}
+
+function packOrderedPairsIntoGeneBands(
+  pairs: TargetPair[],
+  bandCapacity: number,
+  referenceCount: number,
+  rows: number,
+  sampleIndices: SampleIndexMap,
+): PackedPlate[] {
+  const plates: PackedPlate[] = [];
+
+  for (const pair of pairs) {
+    let bestIndex = -1;
+    let bestLoad = -1;
+
+    for (let index = 0; index < plates.length; index += 1) {
+      const existingTargets = plates[index].samples.get(pair.sample);
+      if (!existingTargets || existingTargets.has(pair.gene)) continue;
+      const nextLoad = geneBandLoadAfterPair(
+        plates[index],
+        pair,
+        referenceCount,
+        rows,
+        sampleIndices,
+      );
+      if (nextLoad <= bandCapacity && nextLoad > bestLoad) {
+        bestIndex = index;
+        bestLoad = nextLoad;
+      }
+    }
+
+    if (bestIndex < 0) {
+      for (let index = 0; index < plates.length; index += 1) {
+        if (plates[index].samples.has(pair.sample)) continue;
+        const nextLoad = geneBandLoadAfterPair(
+          plates[index],
+          pair,
+          referenceCount,
+          rows,
+          sampleIndices,
+        );
+        if (nextLoad <= bandCapacity && nextLoad > bestLoad) {
+          bestIndex = index;
+          bestLoad = nextLoad;
+        }
+      }
+    }
+
+    if (bestIndex < 0) {
+      const newPlate = emptyPackedPlate();
+      addTargetPair(newPlate, pair);
+      if (
+        geneBandLoad(
+          newPlate,
+          referenceCount,
+          rows,
+          sampleIndices,
+        ) > bandCapacity
+      ) {
+        throw new PlatePlannerError(
+          "E_INTERLEAVED_GENE_BUNDLE_TOO_LARGE",
+          "当前复孔数与内参数量无法在 384 孔隔行上样的一个 16 行列块组中同时容纳目的基因和内参。 / The selected replicate count and references cannot fit one target-plus-reference bundle in an interleaved 384-well gene layout.",
+        );
+      }
+      plates.push(newPlate);
+      continue;
+    }
+
+    addTargetPair(plates[bestIndex], pair);
+  }
+
+  return plates;
+}
+
+function packWholeSamplesIntoGeneBands(
+  samples: string[],
+  targetGenes: string[],
+  bandCapacity: number,
+  referenceCount: number,
+  rows: number,
+  sampleIndices: SampleIndexMap,
+): PackedPlate[] {
+  if (targetGenes.length + referenceCount > bandCapacity) {
+    return packOrderedPairsIntoGeneBands(
+      sampleMajorPairs(samples, targetGenes),
+      bandCapacity,
+      referenceCount,
+      rows,
+      sampleIndices,
+    );
+  }
+
+  const plates: PackedPlate[] = [];
+  for (const sample of samples) {
+    let bestIndex = -1;
+    let bestLoad = -1;
+
+    for (let index = 0; index < plates.length; index += 1) {
+      const hypothetical = copyPackedPlate(plates[index]);
+      hypothetical.samples.set(sample, new Set(targetGenes));
+      const nextLoad = geneBandLoad(
+        hypothetical,
+        referenceCount,
+        rows,
+        sampleIndices,
+      );
+      if (nextLoad <= bandCapacity && nextLoad > bestLoad) {
+        bestIndex = index;
+        bestLoad = nextLoad;
+      }
+    }
+
+    if (bestIndex < 0) {
+      const newPlate = emptyPackedPlate();
+      newPlate.samples.set(sample, new Set(targetGenes));
+      plates.push(newPlate);
+    } else {
+      plates[bestIndex].samples.set(sample, new Set(targetGenes));
+    }
+  }
+  return plates;
+}
+
 function packIntoPlateLimit(
   samples: string[],
   targetGenes: string[],
@@ -492,6 +711,95 @@ function candidateChunkSizes(length: number) {
   return Array.from(
     new Set(raw.filter((value) => value >= 1 && value <= length)),
   ).sort((left, right) => left - right);
+}
+
+function generateGeneBandPackings(
+  samples: string[],
+  targetGenes: string[],
+  bandCapacity: number,
+  referenceCount: number,
+  rows: number,
+) {
+  const candidates: PackedPlate[][] = [];
+  const signatures = new Set<string>();
+  const sampleIndices = new Map(
+    samples.map((sample, index) => [sample, index]),
+  );
+  const add = (plates: PackedPlate[]) => {
+    const signature = packingSignature(plates);
+    if (!signatures.has(signature)) {
+      signatures.add(signature);
+      candidates.push(plates);
+    }
+  };
+
+  add(
+    packWholeSamplesIntoGeneBands(
+      samples,
+      targetGenes,
+      bandCapacity,
+      referenceCount,
+      rows,
+      sampleIndices,
+    ),
+  );
+  add(
+    packOrderedPairsIntoGeneBands(
+      sampleMajorPairs(samples, targetGenes),
+      bandCapacity,
+      referenceCount,
+      rows,
+      sampleIndices,
+    ),
+  );
+  add(
+    packOrderedPairsIntoGeneBands(
+      geneMajorPairs(samples, targetGenes),
+      bandCapacity,
+      referenceCount,
+      rows,
+      sampleIndices,
+    ),
+  );
+
+  const sampleSizes = candidateChunkSizes(samples.length);
+  const geneSizes = candidateChunkSizes(targetGenes.length);
+  for (const sampleSize of sampleSizes) {
+    for (const geneSize of geneSizes) {
+      add(
+        packOrderedPairsIntoGeneBands(
+          blockPairs(
+            samples,
+            targetGenes,
+            sampleSize,
+            geneSize,
+            "sample",
+          ),
+          bandCapacity,
+          referenceCount,
+          rows,
+          sampleIndices,
+        ),
+      );
+      add(
+        packOrderedPairsIntoGeneBands(
+          blockPairs(
+            samples,
+            targetGenes,
+            sampleSize,
+            geneSize,
+            "gene",
+          ),
+          bandCapacity,
+          referenceCount,
+          rows,
+          sampleIndices,
+        ),
+      );
+    }
+  }
+
+  return candidates;
 }
 
 function packingSignature(plates: PackedPlate[]) {
@@ -855,6 +1163,36 @@ function emptyWells(rows: number, columns: number): PlannerWell[] {
   return wells;
 }
 
+function requiredBlockColumns(
+  sequence: AssayBlock[],
+  rows: number,
+  strategy: LayoutStrategy,
+  loadingPattern: LoadingPattern,
+  sampleIndices: SampleIndexMap,
+) {
+  if (
+    strategy !== "gene-major" ||
+    loadingPattern !== "interleaved-8-channel"
+  ) {
+    return Math.ceil(sequence.length / rows);
+  }
+
+  const geneBands = new Map<string, Set<number>>();
+  for (const block of sequence) {
+    const bands = geneBands.get(block.gene) ?? new Set<number>();
+    bands.add(
+      Math.floor(
+        sampleGlobalIndex(block.sample, sampleIndices) / rows,
+      ),
+    );
+    geneBands.set(block.gene, bands);
+  }
+  return Array.from(geneBands.values()).reduce(
+    (sum, bands) => sum + bands.size,
+    0,
+  );
+}
+
 function materializePlate(
   sequence: AssayBlock[],
   packedPlate: PackedPlate,
@@ -863,13 +1201,67 @@ function materializePlate(
   columns: number,
   replicates: number,
   inputSamples: string[],
+  strategy: LayoutStrategy,
+  loadingPattern: LoadingPattern,
 ): PlannerPlate {
   const wells = emptyWells(rows, columns);
   const wellIndex = new Map(wells.map((well, index) => [well.wellId, index]));
+  const rowOrder = loadingRowOrder(rows, loadingPattern);
+  const sampleIndices = new Map(
+    inputSamples.map((sample, index) => [sample, index]),
+  );
+  const alignEachGene =
+    strategy === "gene-major" &&
+    loadingPattern === "interleaved-8-channel";
+  const alignedGeneBandColumns = new Map<string, Map<number, number>>();
+  if (alignEachGene) {
+    const geneBands = new Map<string, Set<number>>();
+    for (const block of sequence) {
+      const bands = geneBands.get(block.gene) ?? new Set<number>();
+      bands.add(
+        Math.floor(
+          sampleGlobalIndex(block.sample, sampleIndices) / rows,
+        ),
+      );
+      geneBands.set(block.gene, bands);
+    }
+    let nextBlockColumn = 0;
+    for (const [gene, bands] of geneBands) {
+      const columnsByBand = new Map<number, number>();
+      Array.from(bands)
+        .sort((left, right) => left - right)
+        .forEach((band) => {
+          columnsByBand.set(band, nextBlockColumn);
+          nextBlockColumn += 1;
+        });
+      alignedGeneBandColumns.set(gene, columnsByBand);
+    }
+  }
 
   sequence.forEach((block, blockIndex) => {
-    const row = blockIndex % rows;
-    const blockColumn = Math.floor(blockIndex / rows);
+    let rowPosition: number;
+    let blockColumn: number;
+    if (alignEachGene) {
+      const globalIndex = sampleGlobalIndex(
+        block.sample,
+        sampleIndices,
+      );
+      const globalBand = Math.floor(globalIndex / rows);
+      const alignedColumn =
+        alignedGeneBandColumns.get(block.gene)?.get(globalBand);
+      if (alignedColumn === undefined) {
+        throw new PlatePlannerError(
+          "E_INTERNAL_GENE_BAND",
+          "排板计算缺少基因列块映射。 / The gene-band column mapping is missing.",
+        );
+      }
+      rowPosition = globalIndex % rows;
+      blockColumn = alignedColumn;
+    } else {
+      rowPosition = blockIndex % rows;
+      blockColumn = Math.floor(blockIndex / rows);
+    }
+    const row = rowOrder[rowPosition];
     const startColumn = blockColumn * replicates;
     for (
       let replicateIndex = 0;
@@ -914,26 +1306,77 @@ export function planPlateLayout(
   options: PlanOptions = {},
 ): PlanResult {
   const input = validateInput(rawInput);
-  const packings = generatePackings(
-    input.samples,
-    input.targetGenes,
-    input.blockCapacity,
-    input.referenceGenes.length,
+  const loadingPattern = resolveLoadingPattern(
+    input.plateType,
+    options.loadingPattern,
   );
   const strategies: LayoutStrategy[] = options.strategy
     ? [options.strategy]
-    : ["sample-major", "gene-major", "hybrid"];
-  const candidates = packings.flatMap((packing) =>
-    strategies.map((strategy) =>
-      buildCandidate(
-        packing,
-        strategy,
+    : loadingPattern === "interleaved-8-channel"
+      ? ["gene-major"]
+      : ["sample-major", "gene-major", "hybrid"];
+  const sampleIndices = new Map(
+    input.samples.map((sample, index) => [sample, index]),
+  );
+  const usesInterleavedGeneBands =
+    input.plateType === 384 &&
+    loadingPattern === "interleaved-8-channel";
+  const standardPackings = strategies.some(
+    (strategy) => strategy !== "gene-major" || !usesInterleavedGeneBands,
+  )
+    ? generatePackings(
         input.samples,
         input.targetGenes,
-        input.referenceGenes,
-      ),
-    ),
-  );
+        input.blockCapacity,
+        input.referenceGenes.length,
+      )
+    : [];
+  const geneBandPackings =
+    usesInterleavedGeneBands &&
+    strategies.includes("gene-major") &&
+    input.referenceGenes.length + 1 <= input.blocksPerRow
+      ? generateGeneBandPackings(
+          input.samples,
+          input.targetGenes,
+          input.blocksPerRow,
+          input.referenceGenes.length,
+          input.dimensions.rows,
+        )
+      : [];
+  const candidates = strategies.flatMap((strategy) => {
+    const packings =
+      strategy === "gene-major" && usesInterleavedGeneBands
+        ? geneBandPackings
+        : standardPackings;
+    return packings
+      .map((packing) =>
+        buildCandidate(
+          packing,
+          strategy,
+          input.samples,
+          input.targetGenes,
+          input.referenceGenes,
+        ),
+      )
+      .filter((candidate) =>
+        candidate.plateSequences.every(
+          (sequence) =>
+            requiredBlockColumns(
+              sequence,
+              input.dimensions.rows,
+              strategy,
+              loadingPattern,
+              sampleIndices,
+            ) <= input.blocksPerRow,
+        ),
+      );
+  });
+  if (candidates.length === 0) {
+    throw new PlatePlannerError(
+      "E_INTERLEAVED_GENE_BUNDLE_TOO_LARGE",
+      "当前复孔数与内参数量无法形成有效的 384 孔八道排枪隔行布局，请减少复孔数、减少内参数量或改用连续孔位上样。 / The selected replicates and references cannot form a valid interleaved 384-well layout; reduce them or use sequential loading.",
+    );
+  }
   candidates.sort((left, right) =>
     compareScores(candidateScore(left), candidateScore(right)),
   );
@@ -948,6 +1391,8 @@ export function planPlateLayout(
       input.dimensions.columns,
       input.replicates,
       input.samples,
+      best.strategy,
+      loadingPattern,
     ),
   );
   const usedBlocks =
@@ -975,6 +1420,7 @@ export function planPlateLayout(
   return {
     plates,
     strategy: best.strategy,
+    loadingPattern,
     metrics: {
       plateCount: plates.length,
       usedWells,

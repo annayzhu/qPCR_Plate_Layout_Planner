@@ -57,6 +57,7 @@ import {
   validateLayout,
   type GeneType,
   type LayoutPreset,
+  type LoadingPattern,
   type PlanInput,
   type PlannerPlate,
   type PlannerWell,
@@ -96,6 +97,23 @@ interface ToastState {
 }
 
 interface StoredPlannerState {
+  version: 4;
+  plateType: PlateType;
+  samples: SampleEntry[];
+  genes: GeneEntry[];
+  replicates: number;
+  layoutPreset: LayoutPreset;
+  loadingPattern: LoadingPattern;
+  layout: PlanResult | null;
+  automaticLayout: PlanResult | null;
+  layoutSignature: string;
+  generatedAt: string;
+  confirmed: Record<string, boolean>;
+  reactionSystem?: ReactionSystemInput;
+  language: Language;
+}
+
+interface StoredPlannerStateV3 {
   version: 3;
   plateType: PlateType;
   samples: SampleEntry[];
@@ -170,10 +188,14 @@ function clonePlan<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
-function withPlateNames(result: PlanResult | null) {
+function withPlateNames(
+  result: PlanResult | null,
+  fallbackLoadingPattern: LoadingPattern = "sequential",
+) {
   if (!result) return null;
   return {
     ...result,
+    loadingPattern: result.loadingPattern ?? fallbackLoadingPattern,
     plates: result.plates.map((plate) => ({
       ...plate,
       name: plate.name?.trim() || defaultPlateName(plate.plateNumber),
@@ -200,7 +222,29 @@ function normalizedKey(value: string) {
   return value.trim().toLocaleLowerCase();
 }
 
+function defaultLoadingPattern(plateType: PlateType): LoadingPattern {
+  return plateType === 384 ? "interleaved-8-channel" : "sequential";
+}
+
 function experimentSignature(
+  plateType: PlateType,
+  samples: SampleEntry[],
+  genes: GeneEntry[],
+  replicates: number,
+  layoutPreset: LayoutPreset,
+  loadingPattern: LoadingPattern,
+) {
+  return JSON.stringify({
+    plateType,
+    samples: samples.map(({ name }) => name),
+    genes: genes.map(({ name, role }) => ({ name, role })),
+    replicates,
+    layoutPreset,
+    loadingPattern,
+  });
+}
+
+function experimentSignatureV3(
   plateType: PlateType,
   samples: SampleEntry[],
   genes: GeneEntry[],
@@ -216,7 +260,7 @@ function experimentSignature(
   });
 }
 
-function legacyExperimentSignature(
+function experimentSignatureV2(
   plateType: PlateType,
   samples: SampleEntry[],
   genes: GeneEntry[],
@@ -241,21 +285,30 @@ function migrateLayoutSignature(
   genes: GeneEntry[],
   replicates: number,
   layoutPreset: LayoutPreset,
+  loadingPattern: LoadingPattern,
 ) {
   if (!storedSignature) return "";
-  const legacySignature = legacyExperimentSignature(
+  const v2Signature = experimentSignatureV2(
     plateType,
     samples,
     genes,
     replicates,
   );
-  return storedSignature === legacySignature
+  const v3Signature = experimentSignatureV3(
+    plateType,
+    samples,
+    genes,
+    replicates,
+    layoutPreset,
+  );
+  return storedSignature === v2Signature || storedSignature === v3Signature
     ? experimentSignature(
         plateType,
         samples,
         genes,
         replicates,
         layoutPreset,
+        loadingPattern,
       )
     : storedSignature;
 }
@@ -319,6 +372,8 @@ export function QpcrPlanner() {
   const [replicates, setReplicates] = useState(3);
   const [layoutPreset, setLayoutPreset] =
     useState<LayoutPreset>("sample-major");
+  const [loadingPattern, setLoadingPattern] =
+    useState<LoadingPattern>("sequential");
   const [sampleInput, setSampleInput] = useState("");
   const [geneInput, setGeneInput] = useState("");
   const [samplePaste, setSamplePaste] = useState("");
@@ -406,8 +461,9 @@ export function QpcrPlanner() {
         genes,
         replicates,
         layoutPreset,
+        loadingPattern,
       ),
-    [genes, layoutPreset, plateType, replicates, samples],
+    [genes, layoutPreset, loadingPattern, plateType, replicates, samples],
   );
   const settingsStale = Boolean(layout && layoutSignature !== currentSignature);
   const reactionWells = sampleNames.length * genes.length * replicates;
@@ -449,10 +505,26 @@ export function QpcrPlanner() {
           "One target plus all references cannot fit on this plate",
         ),
       );
+    if (
+      plateType === 384 &&
+      loadingPattern === "interleaved-8-channel" &&
+      layoutPreset === "gene-major" &&
+      referenceGenes.length + 1 >
+        Math.floor(dimensions.columns / Math.max(1, replicates))
+    )
+      issues.push(
+        tr(
+          "当前复孔数下，一个 16 行隔行上样列块组无法同时容纳全部内参和至少 1 个目的基因；请减少复孔或内参数量，或切换连续孔位上样",
+          "At this replicate count, one 16-row interleaved band cannot hold all references plus one target; reduce replicates or references, or use sequential loading",
+        ),
+      );
     return issues;
   }, [
     dimensions.columns,
     effectiveBlocks,
+    layoutPreset,
+    loadingPattern,
+    plateType,
     referenceGenes.length,
     replicates,
     sampleNames.length,
@@ -483,6 +555,10 @@ export function QpcrPlanner() {
   );
 
   const activePlate = layout?.plates[activePlateIndex] ?? null;
+  const previewLoadingPattern = layout?.loadingPattern ?? loadingPattern;
+  const previewIs384 = layout
+    ? layout.plates[0]?.rows === 16
+    : plateType === 384;
   const activePlateConfirmed = activePlate
     ? Boolean(confirmed[String(activePlate.plateNumber)])
     : false;
@@ -500,18 +576,23 @@ export function QpcrPlanner() {
         if (saved) {
           const parsed = JSON.parse(saved) as
             | StoredPlannerState
+            | StoredPlannerStateV3
             | StoredPlannerStateV2
             | StoredPlannerStateV1;
           if (parsed.version === 1) {
             const migratedSamples = migrateLegacySamples(parsed.samples);
             const migratedPreset = inferredLayoutPreset(parsed.layout);
+            const migratedLoadingPattern: LoadingPattern = "sequential";
             setPlateType(parsed.plateType);
             setSamples(migratedSamples);
             setGenes(parsed.genes);
             setReplicates(parsed.replicates);
             setLayoutPreset(migratedPreset);
-            setLayout(withPlateNames(parsed.layout));
-            setAutomaticLayout(withPlateNames(parsed.automaticLayout));
+            setLoadingPattern(migratedLoadingPattern);
+            setLayout(withPlateNames(parsed.layout, migratedLoadingPattern));
+            setAutomaticLayout(
+              withPlateNames(parsed.automaticLayout, migratedLoadingPattern),
+            );
             setLayoutSignature(
               migrateLayoutSignature(
                 parsed.layoutSignature,
@@ -520,6 +601,7 @@ export function QpcrPlanner() {
                 parsed.genes,
                 parsed.replicates,
                 migratedPreset,
+                migratedLoadingPattern,
               ),
             );
             setGeneratedAt(parsed.generatedAt);
@@ -530,13 +612,17 @@ export function QpcrPlanner() {
             setSavedAt("restored");
           } else if (parsed.version === 2) {
             const migratedPreset = inferredLayoutPreset(parsed.layout);
+            const migratedLoadingPattern: LoadingPattern = "sequential";
             setPlateType(parsed.plateType);
             setSamples(parsed.samples);
             setGenes(parsed.genes);
             setReplicates(parsed.replicates);
             setLayoutPreset(migratedPreset);
-            setLayout(withPlateNames(parsed.layout));
-            setAutomaticLayout(withPlateNames(parsed.automaticLayout));
+            setLoadingPattern(migratedLoadingPattern);
+            setLayout(withPlateNames(parsed.layout, migratedLoadingPattern));
+            setAutomaticLayout(
+              withPlateNames(parsed.automaticLayout, migratedLoadingPattern),
+            );
             setLayoutSignature(
               migrateLayoutSignature(
                 parsed.layoutSignature,
@@ -545,6 +631,7 @@ export function QpcrPlanner() {
                 parsed.genes,
                 parsed.replicates,
                 migratedPreset,
+                migratedLoadingPattern,
               ),
             );
             setGeneratedAt(parsed.generatedAt);
@@ -555,13 +642,51 @@ export function QpcrPlanner() {
             setLanguage(parsed.language ?? "zh");
             setSavedAt("restored");
           } else if (parsed.version === 3) {
+            const migratedLoadingPattern: LoadingPattern = "sequential";
             setPlateType(parsed.plateType);
             setSamples(parsed.samples);
             setGenes(parsed.genes);
             setReplicates(parsed.replicates);
             setLayoutPreset(parsed.layoutPreset);
-            setLayout(withPlateNames(parsed.layout));
-            setAutomaticLayout(withPlateNames(parsed.automaticLayout));
+            setLoadingPattern(migratedLoadingPattern);
+            setLayout(withPlateNames(parsed.layout, migratedLoadingPattern));
+            setAutomaticLayout(
+              withPlateNames(parsed.automaticLayout, migratedLoadingPattern),
+            );
+            setLayoutSignature(
+              migrateLayoutSignature(
+                parsed.layoutSignature,
+                parsed.plateType,
+                parsed.samples,
+                parsed.genes,
+                parsed.replicates,
+                parsed.layoutPreset,
+                migratedLoadingPattern,
+              ),
+            );
+            setGeneratedAt(parsed.generatedAt);
+            setConfirmed(parsed.confirmed);
+            setReactionSystem(
+              parsed.reactionSystem ?? DEFAULT_REACTION_SYSTEM,
+            );
+            setLanguage(parsed.language ?? "zh");
+            setSavedAt("restored");
+          } else if (parsed.version === 4) {
+            const restoredLoadingPattern =
+              parsed.plateType === 96
+                ? "sequential"
+                : (parsed.loadingPattern ??
+                  defaultLoadingPattern(parsed.plateType));
+            setPlateType(parsed.plateType);
+            setSamples(parsed.samples);
+            setGenes(parsed.genes);
+            setReplicates(parsed.replicates);
+            setLayoutPreset(parsed.layoutPreset);
+            setLoadingPattern(restoredLoadingPattern);
+            setLayout(withPlateNames(parsed.layout, restoredLoadingPattern));
+            setAutomaticLayout(
+              withPlateNames(parsed.automaticLayout, restoredLoadingPattern),
+            );
             setLayoutSignature(parsed.layoutSignature);
             setGeneratedAt(parsed.generatedAt);
             setConfirmed(parsed.confirmed);
@@ -607,6 +732,25 @@ export function QpcrPlanner() {
   function markChanged() {
     setDirty(true);
     setSavedAt("");
+  }
+
+  function chooseLoadingPattern(nextPattern: LoadingPattern) {
+    if (nextPattern === loadingPattern) return;
+    setLoadingPattern(nextPattern);
+    if (
+      nextPattern === "interleaved-8-channel" &&
+      layoutPreset !== "gene-major"
+    ) {
+      setLayoutPreset("gene-major");
+      setToast({
+        tone: "neutral",
+        message: tr(
+          "已推荐切换为按基因排列；仍可手动改回按样本排列。",
+          "Switched to the recommended assay-major layout; you can still choose sample-major.",
+        ),
+      });
+    }
+    markChanged();
   }
 
   function addSamples(values: string[]) {
@@ -733,6 +877,7 @@ export function QpcrPlanner() {
     setGenes(exampleGenes);
     setReplicates(3);
     setLayoutPreset("sample-major");
+    setLoadingPattern("sequential");
     setLayout(null);
     setAutomaticLayout(null);
     setConfirmed({});
@@ -771,6 +916,7 @@ export function QpcrPlanner() {
     try {
       const next = planPlateLayout(planInput, {
         strategy: layoutPreset,
+        loadingPattern,
       });
       const now = new Date().toLocaleString("zh-CN", { hour12: false });
       setLayout(next);
@@ -868,12 +1014,13 @@ export function QpcrPlanner() {
 
   function savePlanner() {
     const payload: StoredPlannerState = {
-      version: 3,
+      version: 4,
       plateType,
       samples,
       genes,
       replicates,
       layoutPreset,
+      loadingPattern,
       layout,
       automaticLayout,
       layoutSignature,
@@ -1200,6 +1347,8 @@ export function QpcrPlanner() {
       targetGenes,
       referenceGenes,
       strategyLabel: layout ? strategyLabel(layout.strategy) : "",
+      layoutStrategy: layout?.strategy,
+      loadingPattern: layout?.loadingPattern ?? loadingPattern,
       generatedAt,
       validationStatus:
         validationStatus ??
@@ -1450,7 +1599,13 @@ export function QpcrPlanner() {
                     }`}
                     type="button"
                     onClick={() => {
+                      if (type === plateType) return;
                       setPlateType(type);
+                      const nextLoadingPattern = defaultLoadingPattern(type);
+                      setLoadingPattern(nextLoadingPattern);
+                      if (nextLoadingPattern === "interleaved-8-channel") {
+                        setLayoutPreset("gene-major");
+                      }
                       if (replicates > size.columns) setReplicates(size.columns);
                       markChanged();
                     }}
@@ -1866,7 +2021,10 @@ export function QpcrPlanner() {
                   {tr("排布方式", "Layout mode")}
                 </span>
                 <span className="layout-preset-direction">
-                  {tr("纵向优先", "Top-to-bottom first")}
+                  {plateType === 384 &&
+                  loadingPattern === "interleaved-8-channel"
+                    ? tr("隔行纵向", "Interleaved vertical")
+                    : tr("纵向优先", "Top-to-bottom first")}
                 </span>
               </div>
               <div
@@ -1902,7 +2060,18 @@ export function QpcrPlanner() {
                 </button>
               </div>
               <p className="microcopy layout-preset-help">
-                {layoutPreset === "sample-major"
+                {plateType === 384 &&
+                loadingPattern === "interleaved-8-channel"
+                  ? layoutPreset === "sample-major"
+                    ? tr(
+                        "同一样本的全部基因优先相邻；检测块按两次隔行上样路径纵向填充，再向右换列。",
+                        "Keep one sample's assays together; fill the two interleaved passes vertically before moving right.",
+                      )
+                    : tr(
+                        "同一基因的全部样本优先相邻；样本按两次隔行上样路径纵向填充，再向右换列。",
+                        "Keep one assay's samples together; fill the two interleaved passes vertically before moving right.",
+                      )
+                  : layoutPreset === "sample-major"
                   ? tr(
                       "同一样本的全部基因优先相邻；检测块从上到下，再从左到右。",
                       "Keep all assays for one sample together; fill blocks top-to-bottom, then left-to-right.",
@@ -1913,6 +2082,109 @@ export function QpcrPlanner() {
                     )}
               </p>
             </div>
+            {plateType === 384 && (
+              <div className="loading-pattern">
+                <div className="loading-pattern-heading">
+                  <span className="field-label">
+                    {tr("384 孔上样方式", "384-well loading pattern")}
+                  </span>
+                  <span className="loading-pattern-badge">
+                    {tr("物理孔位映射", "Physical mapping")}
+                  </span>
+                </div>
+                <div
+                  className="loading-pattern-options"
+                  role="radiogroup"
+                  aria-label={tr(
+                    "选择 384 孔上样方式",
+                    "Choose the 384-well loading pattern",
+                  )}
+                >
+                  <button
+                    className={`loading-pattern-option ${
+                      loadingPattern === "interleaved-8-channel"
+                        ? "selected"
+                        : ""
+                    }`}
+                    type="button"
+                    role="radio"
+                    aria-checked={
+                      loadingPattern === "interleaved-8-channel"
+                    }
+                    onClick={() =>
+                      chooseLoadingPattern("interleaved-8-channel")
+                    }
+                  >
+                    <span
+                      className="loading-pattern-radio"
+                      aria-hidden="true"
+                    />
+                    <span>
+                      <strong>
+                        {tr(
+                          "八道排枪隔行上样",
+                          "Interleaved 8-channel loading",
+                        )}
+                      </strong>
+                      <small>
+                        {tr(
+                          "固定 9 mm · 推荐",
+                          "Fixed 9 mm · Recommended",
+                        )}
+                      </small>
+                    </span>
+                  </button>
+                  <button
+                    className={`loading-pattern-option ${
+                      loadingPattern === "sequential" ? "selected" : ""
+                    }`}
+                    type="button"
+                    role="radio"
+                    aria-checked={loadingPattern === "sequential"}
+                    onClick={() => chooseLoadingPattern("sequential")}
+                  >
+                    <span
+                      className="loading-pattern-radio"
+                      aria-hidden="true"
+                    />
+                    <span>
+                      <strong>
+                        {tr(
+                          "连续孔位上样",
+                          "Sequential well loading",
+                        )}
+                      </strong>
+                      <small>
+                        {tr(
+                          "4.5 mm / 自动化 / 单道",
+                          "4.5 mm / automation / single-channel",
+                        )}
+                      </small>
+                    </span>
+                  </button>
+                </div>
+                {loadingPattern === "interleaved-8-channel" && (
+                  <div
+                    className={`loading-pattern-advisory ${
+                      layoutPreset === "sample-major" ? "attention" : ""
+                    }`}
+                  >
+                    <Info size={13} aria-hidden="true" />
+                    <span>
+                      {layoutPreset === "sample-major"
+                        ? tr(
+                            "按基因排列才会生成固定 A–H 来源板映射；当前仍可按样本生成，但来源板需人工规划。",
+                            "Assay-major generates the fixed A–H source-plate map. Sample-major remains available, but its source plate must be planned manually.",
+                          )
+                        : tr(
+                            "默认样本源板按输入顺序 A–H 向下、再到下一列；每个基因先排 A/C/E/G/I/K/M/O，再排 B/D/F/H/J/L/N/P。",
+                            "The source plate follows input order down A–H, then advances one column; each assay uses A/C/E/G/I/K/M/O, then B/D/F/H/J/L/N/P.",
+                          )}
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
             <div className="setup-summary">
               <strong>
                 {tr(
@@ -1970,7 +2242,18 @@ export function QpcrPlanner() {
                     )}
               </h1>
               <p className="hero-copy">
-                {(layout?.strategy ?? layoutPreset) === "gene-major"
+                {previewIs384 &&
+                previewLoadingPattern === "interleaved-8-channel"
+                  ? (layout?.strategy ?? layoutPreset) === "gene-major"
+                    ? tr(
+                        "按基因排列：同一基因下的样本先填充 A/C/E/G/I/K/M/O，再填充 B/D/F/H/J/L/N/P；复孔同行横向连续。样本目的基因跨板时，新板会重新安排该样本的全部内参。",
+                        "By assay: samples fill A/C/E/G/I/K/M/O first, then B/D/F/H/J/L/N/P; replicates stay contiguous within a row. When a sample continues onto another plate, all references are rerun there.",
+                      )
+                    : tr(
+                        "按样本排列：同一样本的全部基因优先成组，并按两次隔行上样路径纵向填充；复孔同行横向连续。样本目的基因跨板时，新板会重新安排该样本的全部内参。按基因排列通常更适合八道排枪直接转移。",
+                        "By sample: one sample's assays stay grouped and fill the two interleaved loading passes vertically; replicates remain contiguous within a row. When a sample continues onto another plate, all references are rerun there. Assay-major is usually better for direct 8-channel transfer.",
+                      )
+                  : (layout?.strategy ?? layoutPreset) === "gene-major"
                   ? tr(
                       "按基因排列：同一基因下的样本按输入顺序从上到下、再从左到右；复孔同行横向连续。样本目的基因跨板时，新板会重新安排该样本的全部内参。",
                       "By assay: samples follow input order top-to-bottom, then left-to-right; replicates stay contiguous within a row. When a sample continues onto another plate, all references are rerun there.",
@@ -2335,6 +2618,39 @@ export function QpcrPlanner() {
                     </span>
                   </div>
 
+                  {activePlate.rows === 16 &&
+                    previewLoadingPattern === "interleaved-8-channel" && (
+                      <div
+                        className="loading-route-guide"
+                        aria-label={tr(
+                          "八道排枪隔行上样路径",
+                          "Interleaved 8-channel loading route",
+                        )}
+                      >
+                        <span className="loading-route-guide-title">
+                          {tr("上样路径", "Loading route")}
+                        </span>
+                        <span className="loading-route-pass pass-one">
+                          <b aria-hidden="true">①</b>
+                          <span>
+                            {tr("第 1 次", "Pass 1")} · A/C/E/G/I/K/M/O
+                          </span>
+                        </span>
+                        <span className="loading-route-pass pass-two">
+                          <b aria-hidden="true">②</b>
+                          <span>
+                            {tr("第 2 次", "Pass 2")} · B/D/F/H/J/L/N/P
+                          </span>
+                        </span>
+                        <span className="loading-route-note">
+                          {tr(
+                            "孔板仍按真实 A–P 顺序显示",
+                            "Plate remains in physical A–P order",
+                          )}
+                        </span>
+                      </div>
+                    )}
+
                   <div className="selection-toolbar" aria-live="polite">
                     <span>
                       {selectedWellIds.length > 0
@@ -2443,7 +2759,7 @@ export function QpcrPlanner() {
                   <div className="plate-scroll">
                     <div
                       className={`plate-grid ${
-                        plateType === 384 ? "plate-384" : ""
+                        activePlate.rows === 16 ? "plate-384" : ""
                       } ${moveMode ? "move-mode" : ""}`}
                       style={
                         {
@@ -2471,10 +2787,41 @@ export function QpcrPlanner() {
                       {Array.from({ length: activePlate.rows }).map((_, row) => (
                         <Fragment key={`row-${row}`}>
                           <span
-                            className="row-header"
+                            className={`row-header ${
+                              activePlate.rows === 16 &&
+                              previewLoadingPattern ===
+                                "interleaved-8-channel"
+                                ? "with-route"
+                                : ""
+                            }`}
                             role="rowheader"
                           >
-                            {formatWellId(row, 0).replace(/\d+$/, "")}
+                            <span>
+                              {formatWellId(row, 0).replace(/\d+$/, "")}
+                            </span>
+                            {activePlate.rows === 16 &&
+                              previewLoadingPattern ===
+                                "interleaved-8-channel" && (
+                                <span
+                                  className={`row-route-marker ${
+                                    row % 2 === 0
+                                      ? "pass-one"
+                                      : "pass-two"
+                                  }`}
+                                  title={
+                                    row % 2 === 0
+                                      ? tr("第 1 次上样", "Pass 1")
+                                      : tr("第 2 次上样", "Pass 2")
+                                  }
+                                  aria-label={
+                                    row % 2 === 0
+                                      ? tr("第 1 次上样", "Pass 1")
+                                      : tr("第 2 次上样", "Pass 2")
+                                  }
+                                >
+                                  {row % 2 === 0 ? "①" : "②"}
+                                </span>
+                              )}
                           </span>
                           {activePlate.wells
                             .filter((well) => well.row === row)
@@ -2577,7 +2924,7 @@ export function QpcrPlanner() {
                                       <span className="well-label">
                                         {shortLabel(
                                           well.sample ?? "",
-                                          plateType === 384 ? 4 : 7,
+                                          activePlate.rows === 16 ? 4 : 7,
                                         )}
                                       </span>
                                       <span className="well-sub">

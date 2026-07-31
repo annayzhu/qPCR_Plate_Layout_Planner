@@ -5,9 +5,15 @@
 ## 核心规则 / Core rules
 
 - 技术复孔从左向右连续排布，不跨行。
+- 384 孔板默认采用固定 9 mm 八道排枪隔行上样：先
+  `A/C/E/G/I/K/M/O`，再 `B/D/F/H/J/L/N/P`；也可切换为连续孔位上样。
+- 隔行来源板默认按样本输入顺序从 A–H 向下放置，再移动到下一列；
+  同一样本在不同基因和不同孔板中保持相同的来源行与八道样本组。
+- 隔行模式推荐按基因排列，并让每个基因从新的 16 行复孔列块开始；
+  孔板预览和 Excel 始终保留真实的 A–P 物理行序。
 - 目的基因可以跨板；任何包含某样本目的基因的板，都必须同时包含该样本的全部内参。
 - 优化候选依次比较：孔板数、跨板内参重做、基因跨板批次、板内引物切换和样本切换。
-- 手动编辑以完整复孔组为单位；修改孔以独立颜色和边框标记，并重新执行全局校验。
+- 手动编辑支持单孔、Shift 连选和 Ctrl/⌘ 不连续多选；修改孔以独立颜色和边框标记，并重新执行全局校验，但提醒不限制保存或导出。
 - 反应用量按实际占用孔计算，包括跨板重复内参和手动编辑后的孔位。
 
 ## 反应计算 / Reaction calculation
@@ -29,13 +35,14 @@ Prepare volume = required volume × (1 + overage%)
 
 - `Plate_Map`
 - `Well_Detail`
-- `Design_Summary`
-- `Reaction_Setup`
-- `Total_Requirements`
 - `Gene_Requirements`
 - `Sample_cDNA`
+- `Total_Requirements`
+- `Design_Summary`
+- `Reaction_Setup`
 
-批量导出 ZIP 还包含全部孔板总览工作簿。
+`Well_Detail` 会在 384 孔八道隔行模式下记录上样批次、来源行 A–H
+和八道样本组。批量导出 ZIP 还包含全部孔板总览工作簿。
 
 ## 特别说明 / Special note
 
