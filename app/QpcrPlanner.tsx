@@ -1684,6 +1684,9 @@ export function QpcrPlanner() {
           </div>
         </div>
         <div className="topbar-actions">
+          <a className="button" href="/results-20260803">
+            {tr("查看 8月3日结果", "View Aug 3 results")}
+          </a>
           <div
             className="language-switch"
             role="group"
