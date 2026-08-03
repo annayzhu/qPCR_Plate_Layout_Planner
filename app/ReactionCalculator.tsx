@@ -122,7 +122,7 @@ const COPY = {
     cdnaBoundary:
       "未输入 cDNA 浓度和逆转录稀释倍数，因此不能换算原始 RNA 或组织样本量。",
     defaults:
-      "初始值为 10 µL 体系、5 µL 预混液、10 µM 引物液、上下游引物各 0.4 µL（每条终浓度 400 nM）、cDNA 1 µL 和 10% 余量；其他体系请参考试剂说明书。请另行预留 NTC、no-RT 等控制孔，并核查单一熔解峰、扩增效率及内参稳定性；控制孔未自动计入当前用量。",
+      "初始值为 10 µL 体系、5 µL 预混液、10 µM 引物液、上下游引物各 0.2 µL（每条终浓度 200 nM）、cDNA 1 µL 和 12% 余量；其他体系请参考试剂说明书。请另行预留 NTC、no-RT 等控制孔，并核查单一熔解峰、扩增效率及内参稳定性；控制孔未自动计入当前用量。",
     sources: "来源核查：",
     reference: "内参",
   },
@@ -198,7 +198,7 @@ const COPY = {
     cdnaBoundary:
       "cDNA concentration and reverse-transcription dilution factor were not entered, so the result cannot be converted to the amount of starting RNA or tissue.",
     defaults:
-      "Defaults are a 10 µL reaction, 5 µL master mix, 10 µM primer solutions, 0.4 µL each forward and reverse primer (400 nM final each), 1 µL cDNA, and 10% overage. For other reaction setups, consult the reagent instructions. Reserve NTC and no-RT control wells separately, and verify a single melt peak, amplification efficiency, and reference-gene stability; control wells are not included automatically.",
+      "Defaults are a 10 µL reaction, 5 µL master mix, 10 µM primer solutions, 0.2 µL each forward and reverse primer (200 nM final each), 1 µL cDNA, and 12% overage. For other reaction setups, consult the reagent instructions. Reserve NTC and no-RT control wells separately, and verify a single melt peak, amplification efficiency, and reference-gene stability; control wells are not included automatically.",
     sources: "Sources checked:",
     reference: "Reference",
   },

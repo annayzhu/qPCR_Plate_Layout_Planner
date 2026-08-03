@@ -20,12 +20,12 @@ export interface ReactionSystemInput {
 
 export const DEFAULT_REACTION_SYSTEM: ReactionSystemInput = {
   cdnaPerWellUl: 1,
-  forwardPrimerPerWellUl: 0.4,
-  reversePrimerPerWellUl: 0.4,
+  forwardPrimerPerWellUl: 0.2,
+  reversePrimerPerWellUl: 0.2,
   primerStockConcentrationUm: 10,
   masterMixPerWellUl: 5,
   totalPerWellUl: 10,
-  overagePercent: 10,
+  overagePercent: 12,
   geneMixPreparationMode: "eight-strip",
 };
 

@@ -4,9 +4,23 @@ import { planPlateLayout } from "../lib/platePlanner";
 import {
   calculateEightStripGeneMixRequirements,
   calculateReactionRequirements,
+  DEFAULT_REACTION_SYSTEM,
   normalizeReactionSystemInput,
   primerFinalConcentrationNm,
 } from "../lib/reactionCalculator";
+
+test("uses the requested default 10 µL reaction setup", () => {
+  assert.deepEqual(DEFAULT_REACTION_SYSTEM, {
+    cdnaPerWellUl: 1,
+    forwardPrimerPerWellUl: 0.2,
+    reversePrimerPerWellUl: 0.2,
+    primerStockConcentrationUm: 10,
+    masterMixPerWellUl: 5,
+    totalPerWellUl: 10,
+    overagePercent: 12,
+    geneMixPreparationMode: "eight-strip",
+  });
+});
 
 test("calculates a conventional 10 µL per-well SYBR Green system", () => {
   const layout = planPlateLayout({
@@ -21,11 +35,11 @@ test("calculates a conventional 10 µL per-well SYBR Green system", () => {
     {
       totalPerWellUl: 10,
       masterMixPerWellUl: 5,
-      forwardPrimerPerWellUl: 0.4,
-      reversePrimerPerWellUl: 0.4,
+      forwardPrimerPerWellUl: 0.2,
+      reversePrimerPerWellUl: 0.2,
       primerStockConcentrationUm: 10,
       cdnaPerWellUl: 1,
-      overagePercent: 10,
+      overagePercent: 12,
       geneMixPreparationMode: "eight-strip",
     },
     ["S1", "S2"],
@@ -38,16 +52,16 @@ test("calculates a conventional 10 µL per-well SYBR Green system", () => {
 
   assert.equal(result.valid, true);
   assert.equal(result.totalWells, 18);
-  assert.equal(result.waterPerWellUl, 3.2);
-  assert.equal(result.forwardPrimerFinalConcentrationNm, 400);
-  assert.equal(result.reversePrimerFinalConcentrationNm, 400);
+  assert.ok(Math.abs(result.waterPerWellUl - 3.6) < 1e-9);
+  assert.equal(result.forwardPrimerFinalConcentrationNm, 200);
+  assert.equal(result.reversePrimerFinalConcentrationNm, 200);
   assert.deepEqual(
-    result.perWellRows.map((row) => row.volumeUl),
-    [5, 0.4, 0.4, 1, 3.2],
+    result.perWellRows.map((row) => Number(row.volumeUl.toFixed(6))),
+    [5, 0.2, 0.2, 1, 3.6],
   );
   assert.equal(result.sampleRequirements[0].wellCount, 9);
   assert.ok(
-    Math.abs(result.sampleRequirements[0].recommendedCdnaUl - 9.9) <
+    Math.abs(result.sampleRequirements[0].recommendedCdnaUl - 10.08) <
       1e-9,
   );
   assert.equal(result.geneRequirements[0].wellCount, 6);
@@ -269,6 +283,7 @@ test("fills the 10 µM default when restoring a legacy reaction setup", () => {
   assert.equal(restored.forwardPrimerPerWellUl, 0.5);
   assert.equal(restored.reversePrimerPerWellUl, 0.5);
   assert.equal(restored.primerStockConcentrationUm, 10);
+  assert.equal(restored.overagePercent, 12);
   assert.equal(restored.geneMixPreparationMode, "eight-strip");
 
   const explicit = normalizeReactionSystemInput({
@@ -316,14 +331,14 @@ test("calculates 384-well A–H assay-mix aliquots from physical interleaved row
   assert.equal(target.channels[0].pass1WellCount, 3);
   assert.equal(target.channels[0].pass2WellCount, 3);
   assert.equal(target.channels[0].wellCount, 6);
-  assert.ok(Math.abs(target.channels[0].assayMixUl - 59.4) < 1e-9);
+  assert.ok(Math.abs(target.channels[0].assayMixUl - 60.48) < 1e-9);
   assert.equal(target.channels[1].blankWellCount, 3);
   assert.ok(
-    Math.abs(target.channels[1].blankReplacementWaterUl - 3.3) < 1e-9,
+    Math.abs(target.channels[1].blankReplacementWaterUl - 3.36) < 1e-9,
   );
   assert.equal(target.channels[2].wellCount, 3);
-  assert.ok(Math.abs(target.channels[2].assayMixUl - 29.7) < 1e-9);
-  assert.ok(Math.abs(target.totalAssayMixUl - 297) < 1e-9);
+  assert.ok(Math.abs(target.channels[2].assayMixUl - 30.24) < 1e-9);
+  assert.ok(Math.abs(target.totalAssayMixUl - 302.4) < 1e-9);
 });
 
 test("does not create eight-strip aliquots in single-tube mode", () => {

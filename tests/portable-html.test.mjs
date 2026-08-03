@@ -73,6 +73,8 @@ test("portable package includes readable instructions and licenses", async () =>
   assert.equal(licenses.at(0), "\uFEFF");
   assert.match(readme, /无需安装 Node、Python/u);
   assert.match(readme, /“重置工具”会清除本机保存记录/u);
+  assert.match(readme, /每条引物 0\.2 µL/u);
+  assert.match(readme, /配液余量为 12%/u);
   assert.match(version, /单文件离线 HTML/u);
   assert.match(licenses, /react@19\.2\.6/u);
   assert.match(licenses, /xlsx-js-style@1\.2\.0/u);
