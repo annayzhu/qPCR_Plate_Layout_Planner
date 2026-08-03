@@ -17,8 +17,9 @@ import JSZip from "jszip";
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const projectDirectory = path.resolve(scriptDirectory, "..");
 const outputRoot = path.join(projectDirectory, "outputs", "portable");
-const folderName = "RT-qPCR_Plate_Planner_Portable";
-const htmlFilename = "Open_RT-qPCR_Plate_Planner.html";
+const folderName = "qPCR_Plate_Layout_Planner_Portable";
+const htmlFilename = "Open_qPCR_Plate_Layout_Planner.html";
+const legacyFolderNames = ["RT-qPCR_Plate_Planner_Portable"];
 const readmeFilename = "README_CN_EN.txt";
 const versionFilename = "VERSION.txt";
 const licenseFilename = "THIRD_PARTY_LICENSES.txt";
@@ -109,8 +110,8 @@ async function thirdPartyLicenseText(metafile) {
   );
 
   return [
-    "RT-qPCR(SYBR Green)板布局规划工具｜第三方软件许可",
-    "RT-qPCR (SYBR Green) Plate Layout Planner | Third-Party Notices",
+    "qPCR 板布局规划工具｜第三方软件许可",
+    "qPCR Plate Layout Planner | Third-Party Notices",
     "",
     "本文件保留离线 HTML 所内嵌第三方组件的版权与许可声明。",
     "This file preserves copyright and license notices for components bundled into the offline HTML.",
@@ -188,7 +189,7 @@ try {
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light" />
-    <title>RT-qPCR(SYBR Green)板布局规划工具</title>
+    <title>qPCR 板布局规划工具</title>
     <style>${escapeInlineStyle(css)}</style>
   </head>
   <body>
@@ -198,8 +199,8 @@ try {
   </body>
 </html>
 `;
-  const readme = `RT-qPCR(SYBR Green)板布局规划工具｜离线便携版
-RT-qPCR (SYBR Green) Plate Layout Planner | Offline Portable Edition
+  const readme = `qPCR 板布局规划工具｜离线便携版
+qPCR Plate Layout Planner | Offline Portable Edition
 
 使用方法 / How to use
 1. 请保留并拷贝解压后的整个文件夹。Keep the entire extracted folder together.
@@ -286,7 +287,21 @@ RT-qPCR (SYBR Green) Plate Layout Planner | Offline Portable Edition
   const outputEntries = await readdir(outputRoot, { withFileTypes: true });
   for (const entry of outputEntries) {
     const entryPath = path.join(outputRoot, entry.name);
-    if (entry.name === folderName && entry.isDirectory()) {
+    const isKnownPortableFolder = [folderName, ...legacyFolderNames].includes(
+      entry.name,
+    );
+    const isLegacyDatedZip = legacyFolderNames.some((legacyFolderName) =>
+      new RegExp(`^${legacyFolderName}_\\d{8}\\.zip$`, "u").test(
+        entry.name,
+      ),
+    );
+    const isLegacyTemporaryZip = legacyFolderNames.some((legacyFolderName) =>
+      new RegExp(
+        `^\\.${legacyFolderName}_\\d{8}\\.zip\\.\\d+\\.tmp$`,
+        "u",
+      ).test(entry.name),
+    );
+    if (isKnownPortableFolder && entry.isDirectory()) {
       await rm(entryPath, { recursive: true, force: true });
     } else if (entry.name === ".DS_Store" && entry.isFile()) {
       await rm(entryPath, { force: true });
@@ -296,9 +311,11 @@ RT-qPCR (SYBR Green) Plate Layout Planner | Offline Portable Edition
       entry.name !== zipFilename
     ) {
       await rm(entryPath, { force: true });
+    } else if (entry.isFile() && isLegacyDatedZip) {
+      await rm(entryPath, { force: true });
     } else if (
       entry.isFile() &&
-      staleTemporaryPattern.test(entry.name)
+      (staleTemporaryPattern.test(entry.name) || isLegacyTemporaryZip)
     ) {
       await rm(entryPath, { force: true });
     }

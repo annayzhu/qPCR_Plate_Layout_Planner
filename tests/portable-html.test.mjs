@@ -10,8 +10,8 @@ const projectDirectory = path.resolve(
   "..",
 );
 const outputRoot = path.join(projectDirectory, "outputs", "portable");
-const folderName = "RT-qPCR_Plate_Planner_Portable";
-const htmlFilename = "Open_RT-qPCR_Plate_Planner.html";
+const folderName = "qPCR_Plate_Layout_Planner_Portable";
+const htmlFilename = "Open_qPCR_Plate_Layout_Planner.html";
 
 function dateStamp(date = new Date()) {
   return [
@@ -43,7 +43,7 @@ test("portable HTML is a self-contained classic-script document", async () => {
 
   assert.match(
     html,
-    /<title>RT-qPCR\(SYBR Green\)板布局规划工具<\/title>/u,
+    /<title>qPCR 板布局规划工具<\/title>/u,
   );
   assert.match(html, /<div id="qpcr-planner-root"><\/div>/u);
   assert.match(html, /<style>[\s\S]+<\/style>/u);

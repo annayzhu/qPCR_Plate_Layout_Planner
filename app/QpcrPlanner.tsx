@@ -1582,11 +1582,16 @@ export function QpcrPlanner() {
           <div className="brand-copy">
             <p className="brand-title">
               {tr(
-                "RT-qPCR(SYBR Green)板布局规划工具",
-                "RT-qPCR (SYBR Green) Plate Layout Planner",
+                "qPCR 板布局规划工具",
+                "qPCR Plate Layout Planner",
               )}
             </p>
-            <p className="brand-subtitle">RT-qPCR · SYBR Green</p>
+            <p className="brand-subtitle">
+              {tr(
+                "96 / 384 孔 · 排板与反应用量",
+                "96 / 384 wells · Layout & reaction planning",
+              )}
+            </p>
           </div>
         </div>
         <div className="topbar-actions">

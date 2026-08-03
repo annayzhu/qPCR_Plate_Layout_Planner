@@ -30,9 +30,10 @@ test("server-renders the qPCR plate planner shell", async () => {
   const html = await response.text();
   assert.match(
     html,
-    /<title>RT-qPCR\(SYBR Green\)板布局规划工具<\/title>/i,
+    /<title>qPCR 板布局规划工具<\/title>/i,
   );
-  assert.match(html, /RT-qPCR\(SYBR Green\)板布局规划工具/);
+  assert.match(html, /qPCR 板布局规划工具/);
+  assert.match(html, /96 \/ 384 孔 · 排板与反应用量/);
   assert.match(html, /选择孔板/);
   assert.match(html, /添加样本/);
   assert.match(html, /添加检测基因/);

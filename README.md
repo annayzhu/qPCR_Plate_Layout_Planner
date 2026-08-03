@@ -1,6 +1,6 @@
-# RT-qPCR(SYBR Green)板布局规划工具
+# qPCR 板布局规划工具 / qPCR Plate Layout Planner
 
-浏览器端中英文双语工具，用于规划 96/384 孔 RT-qPCR（SYBR Green）实验、手动校正版布局、核算反应体系与试剂需求，并导出单板 Excel 或全部孔板 ZIP。
+浏览器端中英文双语工具，用于规划 96/384 孔 qPCR 实验、手动校正版布局、核算反应体系与试剂需求，并导出单板 Excel 或全部孔板 ZIP。当前版本聚焦单重反应；CNV 多重反应不混入本工具。
 
 ## 核心规则 / Core rules
 

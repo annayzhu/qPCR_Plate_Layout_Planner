@@ -2,13 +2,13 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "RT-qPCR(SYBR Green)板布局规划工具",
+  title: "qPCR 板布局规划工具",
   description:
-    "RT-qPCR（SYBR Green）孔板布局、反应体系核算与 Excel 导出工具。",
+    "96/384 孔 qPCR 板布局、反应体系核算与 Excel 导出工具。",
   openGraph: {
-    title: "RT-qPCR(SYBR Green)板布局规划工具",
+    title: "qPCR 板布局规划工具 / qPCR Plate Layout Planner",
     description:
-      "Plate layout, reaction setup, and reagent requirements for 96- and 384-well RT-qPCR experiments.",
+      "Editable plate layouts, reaction setup, and reagent requirements for 96- and 384-well qPCR experiments.",
     images: ["/og.png"],
   },
   twitter: {
