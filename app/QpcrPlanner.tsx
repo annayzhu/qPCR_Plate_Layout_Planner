@@ -1926,30 +1926,41 @@ export function QpcrPlanner() {
                           `Sample name: ${sample.name || "empty"}`,
                         )}
                       />
-                      <select
-                        className={`sample-kind-select ${
+                      <button
+                        className={`entry-type-toggle ${
                           sample.kind === "blank" ? "is-blank" : ""
                         }`}
-                        value={sample.kind}
-                        onChange={(event) => {
-                          const nextKind = event.target.value as SampleKind;
+                        type="button"
+                        onClick={() => {
                           setSamples((current) =>
                             current.map((item) =>
                               item.id === sample.id
-                                ? { ...item, kind: nextKind }
+                                ? {
+                                    ...item,
+                                    kind:
+                                      item.kind === "sample"
+                                        ? "blank"
+                                        : "sample",
+                                  }
                                 : item,
                             ),
                           );
                           markChanged();
                         }}
+                        aria-pressed={sample.kind === "blank"}
                         aria-label={tr(
-                          `${sample.name || "当前行"}的类型`,
-                          `Type for ${sample.name || "this row"}`,
+                          `将 ${sample.name || "当前行"}切换为${
+                            sample.kind === "sample" ? "Blank" : "样本"
+                          }`,
+                          `Change ${sample.name || "this row"} to ${
+                            sample.kind === "sample" ? "Blank" : "Sample"
+                          }`,
                         )}
                       >
-                        <option value="sample">{tr("样本", "Sample")}</option>
-                        <option value="blank">Blank</option>
-                      </select>
+                        {sample.kind === "blank"
+                          ? "Blank"
+                          : tr("样本", "Sample")}
+                      </button>
                       <button
                         className="sample-delete-button"
                         type="button"
@@ -1988,19 +1999,30 @@ export function QpcrPlanner() {
                     aria-label={tr("新样本名称", "New sample name")}
                     autoFocus
                   />
-                  <select
-                    className={`sample-kind-select ${
+                  <button
+                    className={`entry-type-toggle ${
                       sampleInputKind === "blank" ? "is-blank" : ""
                     }`}
-                    value={sampleInputKind}
-                    onChange={(event) =>
-                      setSampleInputKind(event.target.value as SampleKind)
+                    type="button"
+                    onClick={() =>
+                      setSampleInputKind((current) =>
+                        current === "sample" ? "blank" : "sample",
+                      )
                     }
-                    aria-label={tr("新样本类型", "New sample type")}
+                    aria-pressed={sampleInputKind === "blank"}
+                    aria-label={tr(
+                      `将新样本切换为${
+                        sampleInputKind === "sample" ? "Blank" : "样本"
+                      }`,
+                      `Change new sample to ${
+                        sampleInputKind === "sample" ? "Blank" : "Sample"
+                      }`,
+                    )}
                   >
-                    <option value="sample">{tr("样本", "Sample")}</option>
-                    <option value="blank">Blank</option>
-                  </select>
+                    {sampleInputKind === "blank"
+                      ? "Blank"
+                      : tr("样本", "Sample")}
+                  </button>
                   <div className="sample-draft-actions">
                     <button
                       className="sample-delete-button"
@@ -2137,34 +2159,41 @@ export function QpcrPlanner() {
                           `Assay name: ${gene.name || "empty"}`,
                         )}
                       />
-                      <select
-                        className={`sample-kind-select ${
+                      <button
+                        className={`entry-type-toggle ${
                           gene.role === "reference" ? "is-reference" : ""
                         }`}
-                        value={gene.role}
-                        onChange={(event) => {
-                          const nextRole = event.target.value as GeneRole;
+                        type="button"
+                        onClick={() => {
                           setGenes((current) =>
                             current.map((item) =>
                               item.id === gene.id
-                                ? { ...item, role: nextRole }
+                                ? {
+                                    ...item,
+                                    role:
+                                      item.role === "target"
+                                        ? "reference"
+                                        : "target",
+                                  }
                                 : item,
                             ),
                           );
                           markChanged();
                         }}
+                        aria-pressed={gene.role === "reference"}
                         aria-label={tr(
-                          `${gene.name || "当前行"}的基因类型`,
-                          `Assay type for ${gene.name || "this row"}`,
+                          `将 ${gene.name || "当前行"}切换为${
+                            gene.role === "target" ? "内参" : "目的基因"
+                          }`,
+                          `Change ${gene.name || "this row"} to ${
+                            gene.role === "target" ? "reference" : "target"
+                          }`,
                         )}
                       >
-                        <option value="target">
-                          {tr("目的基因", "Target")}
-                        </option>
-                        <option value="reference">
-                          {tr("内参", "Reference")}
-                        </option>
-                      </select>
+                        {gene.role === "reference"
+                          ? tr("内参", "Reference")
+                          : tr("目的基因", "Target")}
+                      </button>
                       <button
                         className="sample-delete-button"
                         type="button"
@@ -2203,23 +2232,30 @@ export function QpcrPlanner() {
                     aria-label={tr("新基因名称", "New assay name")}
                     autoFocus
                   />
-                  <select
-                    className={`sample-kind-select ${
+                  <button
+                    className={`entry-type-toggle ${
                       geneInputRole === "reference" ? "is-reference" : ""
                     }`}
-                    value={geneInputRole}
-                    onChange={(event) =>
-                      setGeneInputRole(event.target.value as GeneRole)
+                    type="button"
+                    onClick={() =>
+                      setGeneInputRole((current) =>
+                        current === "target" ? "reference" : "target",
+                      )
                     }
-                    aria-label={tr("新基因类型", "New assay type")}
+                    aria-pressed={geneInputRole === "reference"}
+                    aria-label={tr(
+                      `将新基因切换为${
+                        geneInputRole === "target" ? "内参" : "目的基因"
+                      }`,
+                      `Change new assay to ${
+                        geneInputRole === "target" ? "reference" : "target"
+                      }`,
+                    )}
                   >
-                    <option value="target">
-                      {tr("目的基因", "Target")}
-                    </option>
-                    <option value="reference">
-                      {tr("内参", "Reference")}
-                    </option>
-                  </select>
+                    {geneInputRole === "reference"
+                      ? tr("内参", "Reference")
+                      : tr("目的基因", "Target")}
+                  </button>
                   <div className="sample-draft-actions">
                     <button
                       className="sample-delete-button"
