@@ -5,7 +5,6 @@ import {
   Beaker,
   Check,
   Download,
-  FileSpreadsheet,
   FlaskConical,
   Info,
   Languages,
@@ -390,6 +389,9 @@ export function QpcrPlanner() {
     useState<SampleKind>("sample");
   const [sampleDraftOpen, setSampleDraftOpen] = useState(false);
   const [geneInput, setGeneInput] = useState("");
+  const [geneInputRole, setGeneInputRole] =
+    useState<GeneRole>("target");
+  const [geneDraftOpen, setGeneDraftOpen] = useState(false);
   const [samplePaste, setSamplePaste] = useState("");
   const [genePaste, setGenePaste] = useState("");
   const [layout, setLayout] = useState<PlanResult | null>(null);
@@ -439,6 +441,10 @@ export function QpcrPlanner() {
     () => parseExcelNames(samplePaste),
     [samplePaste],
   );
+  const genePasteNames = useMemo(
+    () => parseExcelNames(genePaste),
+    [genePaste],
+  );
   const blankSampleNames = useMemo(
     () =>
       samples
@@ -453,16 +459,26 @@ export function QpcrPlanner() {
     [blankSampleNames],
   );
   const dimensions = getPlateDimensions(plateType);
-  const targetGenes = useMemo(
-    () => genes.filter((gene) => gene.role === "target").map((gene) => gene.name),
+  const completeGenes = useMemo(
+    () =>
+      genes
+        .filter((gene) => gene.name.trim())
+        .map((gene) => ({ ...gene, name: gene.name.trim() })),
     [genes],
+  );
+  const targetGenes = useMemo(
+    () =>
+      completeGenes
+        .filter((gene) => gene.role === "target")
+        .map((gene) => gene.name),
+    [completeGenes],
   );
   const referenceGenes = useMemo(
     () =>
-      genes
+      completeGenes
         .filter((gene) => gene.role === "reference")
         .map((gene) => gene.name),
-    [genes],
+    [completeGenes],
   );
 
   const planInput: PlanInput = useMemo(
@@ -489,10 +505,11 @@ export function QpcrPlanner() {
     [genes, layoutPreset, loadingPattern, plateType, replicates, samples],
   );
   const settingsStale = Boolean(layout && layoutSignature !== currentSignature);
-  const reactionWells = sampleNames.length * genes.length * replicates;
+  const reactionWells =
+    sampleNames.length * completeGenes.length * replicates;
   const effectiveBlocks =
     dimensions.rows * Math.floor(dimensions.columns / Math.max(1, replicates));
-  const sampleFullRunWells = genes.length * replicates;
+  const sampleFullRunWells = completeGenes.length * replicates;
 
   const inputIssues = useMemo(() => {
     const issues: string[] = [];
@@ -513,6 +530,23 @@ export function QpcrPlanner() {
         tr(
           "样本名称不能重复，请修改重复名称",
           "Sample names must be unique; rename duplicates",
+        ),
+      );
+    if (genes.some((gene) => !gene.name.trim()))
+      issues.push(
+        tr(
+          "请填写所有基因行的名称，或删除空行",
+          "Name every assay row or remove empty rows",
+        ),
+      );
+    else if (
+      new Set(completeGenes.map((gene) => normalizedKey(gene.name))).size !==
+      completeGenes.length
+    )
+      issues.push(
+        tr(
+          "基因名称不能重复，请修改重复名称",
+          "Assay names must be unique; rename duplicates",
         ),
       );
     if (targetGenes.length === 0)
@@ -561,7 +595,9 @@ export function QpcrPlanner() {
     return issues;
   }, [
     dimensions.columns,
+    completeGenes,
     effectiveBlocks,
+    genes,
     layoutPreset,
     loadingPattern,
     plateType,
@@ -587,13 +623,13 @@ export function QpcrPlanner() {
         layout,
         reactionSystem,
         sampleNames,
-        genes.map((gene) => ({
+        completeGenes.map((gene) => ({
           name: gene.name,
           role: gene.role,
         })),
         blankSampleNames,
       ),
-    [blankSampleNames, genes, layout, reactionSystem, sampleNames],
+    [blankSampleNames, completeGenes, layout, reactionSystem, sampleNames],
   );
 
   const activePlate = layout?.plates[activePlateIndex] ?? null;
@@ -853,7 +889,10 @@ export function QpcrPlanner() {
     return additions.length;
   }
 
-  function addGenes(values: string[]) {
+  function addGenes(
+    values: string[],
+    role: GeneRole = "target",
+  ) {
     const existing = new Set(genes.map((gene) => normalizedKey(gene.name)));
     const additions: GeneEntry[] = [];
     const duplicates: string[] = [];
@@ -866,7 +905,7 @@ export function QpcrPlanner() {
         continue;
       }
       existing.add(key);
-      additions.push({ id: makeId("gene"), name: value, role: "target" });
+      additions.push({ id: makeId("gene"), name: value, role });
     }
     if (additions.length > 0) {
       setGenes((current) => [...current, ...additions]);
@@ -893,6 +932,7 @@ export function QpcrPlanner() {
         ),
       });
     }
+    return additions.length;
   }
 
   function submitSample(event: FormEvent) {
@@ -908,8 +948,11 @@ export function QpcrPlanner() {
   function submitGene(event: FormEvent) {
     event.preventDefault();
     if (!geneInput.trim()) return;
-    addGenes([geneInput]);
-    setGeneInput("");
+    if (addGenes([geneInput], geneInputRole) > 0) {
+      setGeneInput("");
+      setGeneInputRole("target");
+      setGeneDraftOpen(false);
+    }
   }
 
   function loadExample() {
@@ -933,6 +976,9 @@ export function QpcrPlanner() {
     setSampleInputKind("sample");
     setSampleDraftOpen(false);
     setGenes(exampleGenes);
+    setGeneInput("");
+    setGeneInputRole("target");
+    setGeneDraftOpen(false);
     setReplicates(3);
     setLayoutPreset("sample-major");
     setLoadingPattern("sequential");
@@ -1149,6 +1195,8 @@ export function QpcrPlanner() {
     setSampleInputKind("sample");
     setSampleDraftOpen(false);
     setGeneInput("");
+    setGeneInputRole("target");
+    setGeneDraftOpen(false);
     setSamplePaste("");
     setGenePaste("");
     setLayout(null);
@@ -1193,7 +1241,7 @@ export function QpcrPlanner() {
       wellIds,
       mode: occupied ? "assay" : "empty",
       sample: occupied?.sample ?? sampleNames[0] ?? "",
-      gene: occupied?.gene ?? genes[0]?.name ?? "",
+      gene: occupied?.gene ?? completeGenes[0]?.name ?? "",
     });
   }
 
@@ -1244,7 +1292,9 @@ export function QpcrPlanner() {
     }
     const next = clonePlan(layout);
     const plate = next.plates[editor.plateIndex];
-    const selectedGene = genes.find((gene) => gene.name === editor.gene);
+    const selectedGene = completeGenes.find(
+      (gene) => gene.name === editor.gene,
+    );
     next.plates[editor.plateIndex] = assignSelectedWells(
       plate,
       editor.wellIds,
@@ -1997,8 +2047,8 @@ export function QpcrPlanner() {
                   </h2>
                   <p className="panel-description">
                     {tr(
-                      "点击切换目的基因或内参",
-                      "Toggle target or reference",
+                      "逐行设置名称及目的/内参类型",
+                      "Set a name and target/reference type for each row",
                     )}
                   </p>
                 </div>
@@ -2009,6 +2059,9 @@ export function QpcrPlanner() {
                   type="button"
                   onClick={() => {
                     setGenes([]);
+                    setGeneInput("");
+                    setGeneInputRole("target");
+                    setGeneDraftOpen(false);
                     markChanged();
                   }}
                 >
@@ -2017,125 +2070,188 @@ export function QpcrPlanner() {
               )}
             </div>
             <div className="entry-stack">
-              <form className="entry-row" onSubmit={submitGene}>
-                <input
-                  className="input"
-                  value={geneInput}
-                  onChange={(event) => setGeneInput(event.target.value)}
-                  placeholder={tr("如 GAPDH", "e.g. GAPDH")}
-                  aria-label={tr("基因名称", "Assay name")}
+              <div className="sample-import-area">
+                <textarea
+                  className="batch-box sample-batch-box"
+                  value={genePaste}
+                  onChange={(event) => setGenePaste(event.target.value)}
+                  placeholder={tr(
+                    "从 Excel 粘贴基因名称，每行一个…",
+                    "Paste assay names from Excel, one per line…",
+                  )}
+                  aria-label={tr("批量粘贴基因", "Paste assays in bulk")}
                 />
                 <button
-                  className="icon-button"
-                  type="submit"
-                  aria-label={tr("添加基因", "Add assay")}
-                  disabled={!geneInput.trim()}
+                  className="button button-soft sample-import-button"
+                  type="button"
+                  disabled={genePasteNames.length === 0}
+                  onClick={() => {
+                    addGenes(genePasteNames);
+                    setGenePaste("");
+                  }}
                 >
-                  <Plus size={16} />
+                  <Plus size={15} />
+                  {tr(
+                    `导入 ${genePasteNames.length} 个基因名称`,
+                    `Import ${genePasteNames.length} assay ${
+                      genePasteNames.length === 1 ? "name" : "names"
+                    }`,
+                  )}
                 </button>
-              </form>
-              <details className="batch-disclosure">
-                <summary>
-                  <span>
-                    {tr("从 Excel 批量粘贴", "Paste from Excel")}
-                  </span>
-                  <FileSpreadsheet size={14} />
-                </summary>
-                <div className="batch-content">
-                  <textarea
-                    className="batch-box"
-                    value={genePaste}
-                    onChange={(event) => setGenePaste(event.target.value)}
-                    placeholder={tr(
-                      "复制一列或多列基因名称\n粘贴到这里",
-                      "Copy one or more columns of assay names\nPaste here",
-                    )}
-                    aria-label={tr("批量粘贴基因", "Paste assays in bulk")}
-                  />
-                  <button
-                    className="button button-soft"
-                    type="button"
-                    disabled={parseExcelNames(genePaste).length === 0}
-                    onClick={() => {
-                      addGenes(parseExcelNames(genePaste));
-                      setGenePaste("");
-                    }}
-                  >
-                    {tr("导入", "Import")}{" "}
-                    {parseExcelNames(genePaste).length || ""}{" "}
-                    {tr("个名称", "names")}
-                  </button>
-                </div>
-              </details>
-              {genes.length > 0 ? (
+              </div>
+              {genes.length > 0 && (
                 <div
                   className="gene-list"
                   aria-label={tr("已添加基因", "Added assays")}
                 >
                   {genes.map((gene) => (
-                    <div className="gene-row" key={gene.id}>
-                      <span className="gene-name" title={gene.name}>
-                        {gene.name}
-                      </span>
-                      <div className="gene-row-actions">
-                        <button
-                          className={`role-toggle ${
-                            gene.role === "reference" ? "reference" : ""
-                          }`}
-                          type="button"
-                          onClick={() => {
-                            setGenes((current) =>
-                              current.map((item) =>
-                                item.id === gene.id
-                                  ? {
-                                      ...item,
-                                      role:
-                                        item.role === "target"
-                                          ? "reference"
-                                          : "target",
-                                    }
-                                  : item,
-                              ),
-                            );
-                            markChanged();
-                          }}
-                          aria-label={tr(
-                            `将 ${gene.name} 切换为${
-                              gene.role === "target" ? "内参" : "目的基因"
-                            }`,
-                            `Change ${gene.name} to ${
-                              gene.role === "target" ? "reference" : "target"
-                            }`,
-                          )}
-                        >
-                          {gene.role === "reference"
-                            ? tr("内参", "Reference")
-                            : tr("目的", "Target")}
-                        </button>
-                        <button
-                          className="chip-remove"
-                          type="button"
-                          onClick={() => {
-                            setGenes((current) =>
-                              current.filter((item) => item.id !== gene.id),
-                            );
-                            markChanged();
-                          }}
-                          aria-label={tr(
-                            `删除基因 ${gene.name}`,
-                            `Remove assay ${gene.name}`,
-                          )}
-                        >
-                          <X size={11} />
-                        </button>
-                      </div>
+                    <div className="sample-row" key={gene.id}>
+                      <input
+                        className="sample-name-input"
+                        value={gene.name}
+                        onChange={(event) => {
+                          const nextName = event.target.value;
+                          setGenes((current) =>
+                            current.map((item) =>
+                              item.id === gene.id
+                                ? { ...item, name: nextName }
+                                : item,
+                            ),
+                          );
+                          markChanged();
+                        }}
+                        onBlur={(event) => {
+                          const trimmedName = event.target.value.trim();
+                          if (trimmedName === event.target.value) return;
+                          setGenes((current) =>
+                            current.map((item) =>
+                              item.id === gene.id
+                                ? { ...item, name: trimmedName }
+                                : item,
+                            ),
+                          );
+                        }}
+                        placeholder={tr("基因名称", "Assay name")}
+                        aria-label={tr(
+                          `基因名称：${gene.name || "未填写"}`,
+                          `Assay name: ${gene.name || "empty"}`,
+                        )}
+                      />
+                      <select
+                        className={`sample-kind-select ${
+                          gene.role === "reference" ? "is-reference" : ""
+                        }`}
+                        value={gene.role}
+                        onChange={(event) => {
+                          const nextRole = event.target.value as GeneRole;
+                          setGenes((current) =>
+                            current.map((item) =>
+                              item.id === gene.id
+                                ? { ...item, role: nextRole }
+                                : item,
+                            ),
+                          );
+                          markChanged();
+                        }}
+                        aria-label={tr(
+                          `${gene.name || "当前行"}的基因类型`,
+                          `Assay type for ${gene.name || "this row"}`,
+                        )}
+                      >
+                        <option value="target">
+                          {tr("目的基因", "Target")}
+                        </option>
+                        <option value="reference">
+                          {tr("内参", "Reference")}
+                        </option>
+                      </select>
+                      <button
+                        className="sample-delete-button"
+                        type="button"
+                        onClick={() => {
+                          setGenes((current) =>
+                            current.filter((item) => item.id !== gene.id),
+                          );
+                          markChanged();
+                        }}
+                        aria-label={tr(
+                          `删除基因 ${gene.name}`,
+                          `Remove assay ${gene.name}`,
+                        )}
+                      >
+                        <Trash2 size={15} />
+                      </button>
                     </div>
                   ))}
                 </div>
-              ) : (
+              )}
+              {genes.length === 0 && !geneDraftOpen && (
                 <p className="microcopy">
                   {tr("尚未添加检测基因", "No assays added")}
                 </p>
+              )}
+              {geneDraftOpen ? (
+                <form
+                  className="sample-row sample-draft-row"
+                  onSubmit={submitGene}
+                >
+                  <input
+                    className="sample-name-input"
+                    value={geneInput}
+                    onChange={(event) => setGeneInput(event.target.value)}
+                    placeholder={tr("输入基因名称", "Enter assay name")}
+                    aria-label={tr("新基因名称", "New assay name")}
+                    autoFocus
+                  />
+                  <select
+                    className={`sample-kind-select ${
+                      geneInputRole === "reference" ? "is-reference" : ""
+                    }`}
+                    value={geneInputRole}
+                    onChange={(event) =>
+                      setGeneInputRole(event.target.value as GeneRole)
+                    }
+                    aria-label={tr("新基因类型", "New assay type")}
+                  >
+                    <option value="target">
+                      {tr("目的基因", "Target")}
+                    </option>
+                    <option value="reference">
+                      {tr("内参", "Reference")}
+                    </option>
+                  </select>
+                  <div className="sample-draft-actions">
+                    <button
+                      className="sample-delete-button"
+                      type="submit"
+                      disabled={!geneInput.trim()}
+                      aria-label={tr("确认添加此行", "Add this row")}
+                    >
+                      <Check size={15} />
+                    </button>
+                    <button
+                      className="sample-delete-button"
+                      type="button"
+                      onClick={() => {
+                        setGeneInput("");
+                        setGeneInputRole("target");
+                        setGeneDraftOpen(false);
+                      }}
+                      aria-label={tr("取消添加此行", "Cancel this row")}
+                    >
+                      <X size={15} />
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                <button
+                  className="sample-add-row"
+                  type="button"
+                  onClick={() => setGeneDraftOpen(true)}
+                >
+                  <Plus size={16} />
+                  {tr("添加一行", "Add row")}
+                </button>
               )}
               {referenceGenes.length === 0 && (
                 <div className="notice notice-warning">
@@ -2384,10 +2500,10 @@ export function QpcrPlanner() {
             <div className="setup-summary">
               <strong>
                 {tr(
-                  `${sampleNames.length} 样本 × ${genes.length} 基因 × ${
+                  `${sampleNames.length} 样本 × ${completeGenes.length} 基因 × ${
                     replicates || 0
                   } 复孔`,
-                  `${sampleNames.length} samples × ${genes.length} assays × ${
+                  `${sampleNames.length} samples × ${completeGenes.length} assays × ${
                     replicates || 0
                   } replicates`,
                 )}
@@ -2771,7 +2887,7 @@ export function QpcrPlanner() {
                       className="legend"
                       aria-label={tr("颜色图例", "Color legend")}
                     >
-                      {genes.map((gene) => {
+                      {completeGenes.map((gene) => {
                         const color =
                           gene.role === "reference"
                             ? "#F3DFC4"
@@ -3189,7 +3305,7 @@ export function QpcrPlanner() {
                   <ReactionCalculator
                     layout={layout}
                     samples={samples.filter((sample) => sample.name.trim())}
-                    genes={genes.map((gene) => ({
+                    genes={completeGenes.map((gene) => ({
                       name: gene.name,
                       role: gene.role,
                     }))}
@@ -3343,7 +3459,7 @@ export function QpcrPlanner() {
                         )
                       }
                     >
-                      {genes.map((gene) => (
+                      {completeGenes.map((gene) => (
                         <option value={gene.name} key={gene.id}>
                           {gene.name} ·{" "}
                           {gene.role === "reference"

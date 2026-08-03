@@ -569,13 +569,7 @@ select:focus-visible,
   color: var(--danger);
 }
 
-.gene-list {
-  display: grid;
-  max-height: 190px;
-  gap: 7px;
-  overflow: auto;
-}
-
+.gene-list,
 .sample-list {
   display: grid;
   max-height: 252px;
@@ -637,6 +631,11 @@ select:focus-visible,
 .sample-kind-select.is-blank {
   background: #f5f1e9;
   color: #745a38;
+}
+
+.sample-kind-select.is-reference {
+  background: var(--reference);
+  color: var(--reference-ink);
 }
 
 .sample-name-input:hover,
@@ -716,51 +715,6 @@ select:focus-visible,
 
 .sample-add-row:hover {
   color: #0e5962;
-}
-
-.gene-row {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 7px 8px 7px 10px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--surface-raised);
-}
-
-.gene-name {
-  overflow: hidden;
-  min-width: 0;
-  font-size: 12px;
-  font-weight: 620;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.gene-row-actions {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 4px;
-}
-
-.role-toggle {
-  min-height: 24px;
-  padding: 3px 8px;
-  border: 0;
-  border-radius: 999px;
-  background: #e5edf5;
-  color: #29465e;
-  cursor: pointer;
-  font-size: 10px;
-  font-weight: 700;
-}
-
-.role-toggle.reference {
-  background: var(--reference);
-  color: var(--reference-ink);
 }
 
 .replicate-control {
