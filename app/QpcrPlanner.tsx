@@ -41,6 +41,9 @@ import {
 } from "@/lib/exportExcel";
 import {
   calculateReactionRequirements,
+  DEFAULT_REACTION_SYSTEM,
+  normalizeReactionSystemInput,
+  type LegacyReactionSystemInput,
   type ReactionSystemInput,
 } from "@/lib/reactionCalculator";
 import {
@@ -97,7 +100,7 @@ interface ToastState {
 }
 
 interface StoredPlannerState {
-  version: 4;
+  version: 5;
   plateType: PlateType;
   samples: SampleEntry[];
   genes: GeneEntry[];
@@ -109,9 +112,17 @@ interface StoredPlannerState {
   layoutSignature: string;
   generatedAt: string;
   confirmed: Record<string, boolean>;
-  reactionSystem?: ReactionSystemInput;
+  reactionSystem?: Partial<ReactionSystemInput>;
   language: Language;
 }
+
+type StoredPlannerStateV4 = Omit<
+  StoredPlannerState,
+  "version" | "reactionSystem"
+> & {
+  version: 4;
+  reactionSystem?: LegacyReactionSystemInput;
+};
 
 interface StoredPlannerStateV3 {
   version: 3;
@@ -125,7 +136,7 @@ interface StoredPlannerStateV3 {
   layoutSignature: string;
   generatedAt: string;
   confirmed: Record<string, boolean>;
-  reactionSystem?: ReactionSystemInput;
+  reactionSystem?: LegacyReactionSystemInput;
   language: Language;
 }
 
@@ -140,7 +151,7 @@ interface StoredPlannerStateV2 {
   layoutSignature: string;
   generatedAt: string;
   confirmed: Record<string, boolean>;
-  reactionSystem?: ReactionSystemInput;
+  reactionSystem?: LegacyReactionSystemInput;
   language: Language;
 }
 
@@ -155,18 +166,10 @@ interface StoredPlannerStateV1 {
   layoutSignature: string;
   generatedAt: string;
   confirmed: Record<string, boolean>;
-  reactionSystem?: ReactionSystemInput;
+  reactionSystem?: LegacyReactionSystemInput;
 }
 
 const STORAGE_KEY = "qpcr-plate-planner:v1";
-const DEFAULT_REACTION_SYSTEM: ReactionSystemInput = {
-  cdnaPerWellUl: 1,
-  primerPairPerWellUl: 0.8,
-  masterMixPerWellUl: 5,
-  totalPerWellUl: 10,
-  overagePercent: 10,
-};
-
 const TARGET_PALETTE = [
   { background: "#DDE8F2", text: "#29465E" },
   { background: "#DCEBE8", text: "#26564F" },
@@ -580,6 +583,7 @@ export function QpcrPlanner() {
         if (saved) {
           const parsed = JSON.parse(saved) as
             | StoredPlannerState
+            | StoredPlannerStateV4
             | StoredPlannerStateV3
             | StoredPlannerStateV2
             | StoredPlannerStateV1;
@@ -611,7 +615,7 @@ export function QpcrPlanner() {
             setGeneratedAt(parsed.generatedAt);
             setConfirmed(parsed.confirmed);
             setReactionSystem(
-              parsed.reactionSystem ?? DEFAULT_REACTION_SYSTEM,
+              normalizeReactionSystemInput(parsed.reactionSystem),
             );
             setSavedAt("restored");
           } else if (parsed.version === 2) {
@@ -641,7 +645,7 @@ export function QpcrPlanner() {
             setGeneratedAt(parsed.generatedAt);
             setConfirmed(parsed.confirmed);
             setReactionSystem(
-              parsed.reactionSystem ?? DEFAULT_REACTION_SYSTEM,
+              normalizeReactionSystemInput(parsed.reactionSystem),
             );
             setLanguage(parsed.language ?? "zh");
             setSavedAt("restored");
@@ -671,11 +675,11 @@ export function QpcrPlanner() {
             setGeneratedAt(parsed.generatedAt);
             setConfirmed(parsed.confirmed);
             setReactionSystem(
-              parsed.reactionSystem ?? DEFAULT_REACTION_SYSTEM,
+              normalizeReactionSystemInput(parsed.reactionSystem),
             );
             setLanguage(parsed.language ?? "zh");
             setSavedAt("restored");
-          } else if (parsed.version === 4) {
+          } else if (parsed.version === 4 || parsed.version === 5) {
             const restoredLoadingPattern =
               parsed.plateType === 96
                 ? "sequential"
@@ -695,7 +699,7 @@ export function QpcrPlanner() {
             setGeneratedAt(parsed.generatedAt);
             setConfirmed(parsed.confirmed);
             setReactionSystem(
-              parsed.reactionSystem ?? DEFAULT_REACTION_SYSTEM,
+              normalizeReactionSystemInput(parsed.reactionSystem),
             );
             setLanguage(parsed.language ?? "zh");
             setSavedAt("restored");
@@ -1018,7 +1022,7 @@ export function QpcrPlanner() {
 
   function savePlanner() {
     const payload: StoredPlannerState = {
-      version: 4,
+      version: 5,
       plateType,
       samples,
       genes,

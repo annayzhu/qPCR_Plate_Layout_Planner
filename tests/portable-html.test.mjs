@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -12,7 +12,6 @@ const projectDirectory = path.resolve(
 const outputRoot = path.join(projectDirectory, "outputs", "portable");
 const folderName = "RT-qPCR_Plate_Planner_Portable";
 const htmlFilename = "Open_RT-qPCR_Plate_Planner.html";
-const outputDirectory = path.join(outputRoot, folderName);
 
 function dateStamp(date = new Date()) {
   return [
@@ -22,11 +21,25 @@ function dateStamp(date = new Date()) {
   ].join("");
 }
 
-test("portable HTML is a self-contained classic-script document", async () => {
-  const html = await readFile(
-    path.join(outputDirectory, htmlFilename),
-    "utf8",
+function currentZipFilename() {
+  return `${folderName}_${dateStamp()}.zip`;
+}
+
+async function loadPortableZip() {
+  return JSZip.loadAsync(
+    await readFile(path.join(outputRoot, currentZipFilename())),
   );
+}
+
+async function readPortableText(zip, filename) {
+  const entry = zip.file(`${folderName}/${filename}`);
+  assert.ok(entry, `${filename} should be present in the portable ZIP`);
+  return entry.async("string");
+}
+
+test("portable HTML is a self-contained classic-script document", async () => {
+  const zip = await loadPortableZip();
+  const html = await readPortableText(zip, htmlFilename);
 
   assert.match(
     html,
@@ -45,14 +58,12 @@ test("portable HTML is a self-contained classic-script document", async () => {
   );
 });
 
-test("portable folder includes readable instructions and licenses", async () => {
+test("portable package includes readable instructions and licenses", async () => {
+  const zip = await loadPortableZip();
   const [readme, version, licenses] = await Promise.all([
-    readFile(path.join(outputDirectory, "README_CN_EN.txt"), "utf8"),
-    readFile(path.join(outputDirectory, "VERSION.txt"), "utf8"),
-    readFile(
-      path.join(outputDirectory, "THIRD_PARTY_LICENSES.txt"),
-      "utf8",
-    ),
+    readPortableText(zip, "README_CN_EN.txt"),
+    readPortableText(zip, "VERSION.txt"),
+    readPortableText(zip, "THIRD_PARTY_LICENSES.txt"),
   ]);
 
   assert.equal(readme.at(0), "\uFEFF");
@@ -67,10 +78,7 @@ test("portable folder includes readable instructions and licenses", async () => 
 });
 
 test("portable ZIP uses cross-platform ASCII paths", async () => {
-  const zipFilename = `${folderName}_${dateStamp()}.zip`;
-  const zip = await JSZip.loadAsync(
-    await readFile(path.join(outputRoot, zipFilename)),
-  );
+  const zip = await loadPortableZip();
   const names = Object.keys(zip.files);
 
   assert.deepEqual(names, [
@@ -81,4 +89,13 @@ test("portable ZIP uses cross-platform ASCII paths", async () => {
     `${folderName}/THIRD_PARTY_LICENSES.txt`,
   ]);
   assert.ok(names.every((name) => /^[\x20-\x7E]+$/u.test(name)));
+});
+
+test("portable output keeps only the latest transferable ZIP", async () => {
+  const entries = await readdir(outputRoot, { withFileTypes: true });
+  assert.deepEqual(
+    entries.map((entry) => entry.name).sort(),
+    [currentZipFilename()],
+  );
+  assert.equal(entries[0].isFile(), true);
 });

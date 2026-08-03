@@ -5,10 +5,51 @@ import type {
 
 export interface ReactionSystemInput {
   cdnaPerWellUl: number;
-  primerPairPerWellUl: number;
+  forwardPrimerPerWellUl: number;
+  reversePrimerPerWellUl: number;
+  /** Concentration of each primer solution actually pipetted into the well. */
+  primerStockConcentrationUm: number;
   masterMixPerWellUl: number;
   totalPerWellUl: number;
   overagePercent: number;
+}
+
+export const DEFAULT_REACTION_SYSTEM: ReactionSystemInput = {
+  cdnaPerWellUl: 1,
+  forwardPrimerPerWellUl: 0.4,
+  reversePrimerPerWellUl: 0.4,
+  primerStockConcentrationUm: 10,
+  masterMixPerWellUl: 5,
+  totalPerWellUl: 10,
+  overagePercent: 10,
+};
+
+export type LegacyReactionSystemInput = Partial<ReactionSystemInput> & {
+  primerPairPerWellUl?: number;
+};
+
+export function normalizeReactionSystemInput(
+  value?: LegacyReactionSystemInput,
+): ReactionSystemInput {
+  const legacyPrimerPair = value?.primerPairPerWellUl;
+  const legacyPrimerPerWell =
+    typeof legacyPrimerPair === "number" && Number.isFinite(legacyPrimerPair)
+      ? legacyPrimerPair / 2
+      : undefined;
+  const current = { ...(value ?? {}) };
+  delete current.primerPairPerWellUl;
+  return {
+    ...DEFAULT_REACTION_SYSTEM,
+    ...current,
+    forwardPrimerPerWellUl:
+      current.forwardPrimerPerWellUl ??
+      legacyPrimerPerWell ??
+      DEFAULT_REACTION_SYSTEM.forwardPrimerPerWellUl,
+    reversePrimerPerWellUl:
+      current.reversePrimerPerWellUl ??
+      legacyPrimerPerWell ??
+      DEFAULT_REACTION_SYSTEM.reversePrimerPerWellUl,
+  };
 }
 
 export interface PerWellReactionRow {
@@ -45,6 +86,8 @@ export interface ReactionCalculation {
   warnings: string[];
   preparationFactor: number;
   waterPerWellUl: number;
+  forwardPrimerFinalConcentrationNm: number;
+  reversePrimerFinalConcentrationNm: number;
   perWellRows: PerWellReactionRow[];
   totalWells: number;
   blankWellCount: number;
@@ -68,6 +111,25 @@ function isNonNegativeFinite(value: number) {
   return Number.isFinite(value) && value >= 0;
 }
 
+export function primerFinalConcentrationNm(
+  stockConcentrationUm: number,
+  primerVolumeUl: number,
+  totalReactionVolumeUl: number,
+) {
+  if (
+    !Number.isFinite(stockConcentrationUm) ||
+    !Number.isFinite(primerVolumeUl) ||
+    !Number.isFinite(totalReactionVolumeUl) ||
+    totalReactionVolumeUl <= 0
+  ) {
+    return Number.NaN;
+  }
+  return (
+    (stockConcentrationUm * primerVolumeUl * 1_000) /
+    totalReactionVolumeUl
+  );
+}
+
 export function calculateReactionRequirements(
   layout: PlanResult | null,
   input: ReactionSystemInput,
@@ -84,7 +146,12 @@ export function calculateReactionRequirements(
     normalizedBlankNames.has(sample.trim().toLocaleLowerCase());
   const namedInputs: Array<[string, number]> = [
     ["cDNA", input.cdnaPerWellUl],
-    ["引物总体积 / primer-pair volume", input.primerPairPerWellUl],
+    ["上游引物体积 / forward-primer volume", input.forwardPrimerPerWellUl],
+    ["下游引物体积 / reverse-primer volume", input.reversePrimerPerWellUl],
+    [
+      "引物液浓度 / primer stock concentration",
+      input.primerStockConcentrationUm,
+    ],
     ["反应预混液 / master mix", input.masterMixPerWellUl],
     ["反应总体积 / total reaction volume", input.totalPerWellUl],
     ["配液余量 / pipetting overage", input.overagePercent],
@@ -106,9 +173,19 @@ export function calculateReactionRequirements(
       "每孔反应预混液体积必须大于 0 µL。 / Master mix volume per well must be > 0 µL.",
     );
   }
-  if (input.primerPairPerWellUl <= 0) {
+  if (input.forwardPrimerPerWellUl <= 0) {
     errors.push(
-      "每孔上、下游引物总体积必须大于 0 µL。 / Combined forward and reverse primer volume must be > 0 µL.",
+      "每孔上游引物体积必须大于 0 µL。 / Forward-primer volume per well must be > 0 µL.",
+    );
+  }
+  if (input.reversePrimerPerWellUl <= 0) {
+    errors.push(
+      "每孔下游引物体积必须大于 0 µL。 / Reverse-primer volume per well must be > 0 µL.",
+    );
+  }
+  if (input.primerStockConcentrationUm <= 0) {
+    errors.push(
+      "实际移取的引物液浓度必须大于 0 µM。 / Primer solution concentration must be > 0 µM.",
     );
   }
   if (input.overagePercent > 50) {
@@ -117,12 +194,24 @@ export function calculateReactionRequirements(
     );
   }
 
-  const forwardPrimerPerWellUl = input.primerPairPerWellUl / 2;
-  const reversePrimerPerWellUl = input.primerPairPerWellUl / 2;
+  const forwardPrimerPerWellUl = input.forwardPrimerPerWellUl;
+  const reversePrimerPerWellUl = input.reversePrimerPerWellUl;
+  const primerPairPerWellUl =
+    forwardPrimerPerWellUl + reversePrimerPerWellUl;
+  const forwardPrimerFinalConcentrationNm = primerFinalConcentrationNm(
+    input.primerStockConcentrationUm,
+    forwardPrimerPerWellUl,
+    input.totalPerWellUl,
+  );
+  const reversePrimerFinalConcentrationNm = primerFinalConcentrationNm(
+    input.primerStockConcentrationUm,
+    reversePrimerPerWellUl,
+    input.totalPerWellUl,
+  );
   const waterPerWellUl =
     input.totalPerWellUl -
     input.masterMixPerWellUl -
-    input.primerPairPerWellUl -
+    primerPairPerWellUl -
     input.cdnaPerWellUl;
   if (waterPerWellUl < -EPSILON) {
     errors.push(
@@ -139,7 +228,7 @@ export function calculateReactionRequirements(
     );
   }
   if (
-    input.primerPairPerWellUl > 0 &&
+    primerPairPerWellUl > 0 &&
     Math.min(forwardPrimerPerWellUl, reversePrimerPerWellUl) < 0.2
   ) {
     warnings.push(
@@ -216,13 +305,13 @@ export function calculateReactionRequirements(
         blankWellCount,
         forwardPrimerUl: factor * forwardPrimerPerWellUl,
         reversePrimerUl: factor * reversePrimerPerWellUl,
-        primerPairUl: factor * input.primerPairPerWellUl,
+        primerPairUl: factor * primerPairPerWellUl,
         masterMixUl: factor * input.masterMixPerWellUl,
         waterUl,
         mixExcludingCdnaUl:
           factor *
           (input.masterMixPerWellUl +
-            input.primerPairPerWellUl +
+            primerPairPerWellUl +
             Math.max(0, waterPerWellUl)) +
           replacementWaterUl,
         reactionVolumeUl: factor * input.totalPerWellUl,
@@ -260,6 +349,8 @@ export function calculateReactionRequirements(
     warnings,
     preparationFactor,
     waterPerWellUl: Math.max(0, waterPerWellUl),
+    forwardPrimerFinalConcentrationNm,
+    reversePrimerFinalConcentrationNm,
     perWellRows: [
       { key: "masterMix", volumeUl: input.masterMixPerWellUl },
       { key: "forwardPrimer", volumeUl: forwardPrimerPerWellUl },
@@ -277,7 +368,7 @@ export function calculateReactionRequirements(
       masterMixUl: factor * input.masterMixPerWellUl,
       forwardPrimerUl: factor * forwardPrimerPerWellUl,
       reversePrimerUl: factor * reversePrimerPerWellUl,
-      primerPairUl: factor * input.primerPairPerWellUl,
+      primerPairUl: factor * primerPairPerWellUl,
       cdnaUl:
         nonBlankWellCount * preparationFactor * input.cdnaPerWellUl,
       waterUl:

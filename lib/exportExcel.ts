@@ -1,6 +1,9 @@
 "use client";
 
-import type { ReactionSystemInput } from "./reactionCalculator";
+import {
+  primerFinalConcentrationNm,
+  type ReactionSystemInput,
+} from "./reactionCalculator";
 import type {
   LayoutStrategy,
   LoadingPattern,
@@ -256,13 +259,24 @@ function appendReactionSheets(
   );
   const templateWells = occupied.length - blankWells.length;
   const factor = 1 + context.reactionSystem.overagePercent / 100;
-  const forwardPerWell = context.reactionSystem.primerPairPerWellUl / 2;
-  const reversePerWell = context.reactionSystem.primerPairPerWellUl / 2;
+  const forwardPerWell = context.reactionSystem.forwardPrimerPerWellUl;
+  const reversePerWell = context.reactionSystem.reversePrimerPerWellUl;
+  const primerPairPerWell = forwardPerWell + reversePerWell;
+  const forwardFinalNm = primerFinalConcentrationNm(
+    context.reactionSystem.primerStockConcentrationUm,
+    forwardPerWell,
+    context.reactionSystem.totalPerWellUl,
+  );
+  const reverseFinalNm = primerFinalConcentrationNm(
+    context.reactionSystem.primerStockConcentrationUm,
+    reversePerWell,
+    context.reactionSystem.totalPerWellUl,
+  );
   const sampleWaterPerWell = Math.max(
     0,
     context.reactionSystem.totalPerWellUl -
       context.reactionSystem.masterMixPerWellUl -
-      context.reactionSystem.primerPairPerWellUl -
+      primerPairPerWell -
       context.reactionSystem.cdnaPerWellUl,
   );
   const blankWaterPerWell =
@@ -281,6 +295,21 @@ function appendReactionSheets(
     ],
     ["上游引物 / Forward primer", forwardPerWell, forwardPerWell],
     ["下游引物 / Reverse primer", reversePerWell, reversePerWell],
+    [
+      "引物液浓度（实际移取）/ Primer solution used (µM)",
+      context.reactionSystem.primerStockConcentrationUm,
+      context.reactionSystem.primerStockConcentrationUm,
+    ],
+    [
+      "上游引物终浓度 / Forward primer final (nM)",
+      roundedVolume(forwardFinalNm),
+      roundedVolume(forwardFinalNm),
+    ],
+    [
+      "下游引物终浓度 / Reverse primer final (nM)",
+      roundedVolume(reverseFinalNm),
+      roundedVolume(reverseFinalNm),
+    ],
     [
       "cDNA 模板 / cDNA template",
       context.reactionSystem.cdnaPerWellUl,
@@ -308,7 +337,7 @@ function appendReactionSheets(
     ],
     [
       "前提 / Assumption",
-      "上、下游引物按等体积分配；未输入引物与 cDNA 浓度，不能核查终浓度或换算原始 RNA 量。 / Forward and reverse primers are split 1:1 by volume. Stock concentration and cDNA concentration are not entered.",
+      `上、下游引物使用相同浓度的实际移取液，体积分别填写；当前终浓度分别为 ${roundedVolume(forwardFinalNm)} nM 和 ${roundedVolume(reverseFinalNm)} nM。未输入 cDNA 浓度，不能换算原始 RNA 量。 / Forward and reverse primers use the same pipetted-solution concentration and their volumes are entered separately; current final concentrations are ${roundedVolume(forwardFinalNm)} nM and ${roundedVolume(reverseFinalNm)} nM. cDNA concentration is not entered.`,
       "Blank 孔不加 cDNA，并以等体积 RNase-free ddH2O 补足。 / Blank wells omit cDNA and replace it with the same volume of RNase-free water.",
     ],
   ];
@@ -353,12 +382,12 @@ function appendReactionSheets(
       roundedVolume(recommendedReactions * reversePerWell),
     ],
     [
-      "上下游引物合计 / Primer pair total",
+      "引物总体积（仅汇总，分别准备）/ Primer total (summary only; prepare separately)",
       roundedVolume(
-        occupied.length * context.reactionSystem.primerPairPerWellUl,
+        occupied.length * primerPairPerWell,
       ),
       roundedVolume(
-        recommendedReactions * context.reactionSystem.primerPairPerWellUl,
+        recommendedReactions * primerPairPerWell,
       ),
     ],
     [
@@ -424,10 +453,13 @@ function appendReactionSheets(
         "下游引物 / Reverse primer (µL)": roundedVolume(
           prepareReactions * reversePerWell,
         ),
-        "引物合计 / Primer pair (µL)": roundedVolume(
-          prepareReactions *
-            context.reactionSystem.primerPairPerWellUl,
+        "引物总体积（仅汇总，分别准备）/ Primer total (summary only; prepare separately) (µL)": roundedVolume(
+          prepareReactions * primerPairPerWell,
         ),
+        "上游引物终浓度 / Forward primer final (nM)":
+          roundedVolume(forwardFinalNm),
+        "下游引物终浓度 / Reverse primer final (nM)":
+          roundedVolume(reverseFinalNm),
         "预混液 / Master mix (µL)": roundedVolume(
           prepareReactions *
             context.reactionSystem.masterMixPerWellUl,
@@ -440,7 +472,7 @@ function appendReactionSheets(
         "配液不含cDNA / Mix excluding cDNA (µL)": roundedVolume(
           (item.count *
             (context.reactionSystem.masterMixPerWellUl +
-              context.reactionSystem.primerPairPerWellUl +
+              primerPairPerWell +
               sampleWaterPerWell) +
             item.blankCount * context.reactionSystem.cdnaPerWellUl) *
             factor,
@@ -457,7 +489,7 @@ function appendReactionSheets(
     { wch: 22 },
     { wch: 14 },
     { wch: 12 },
-    ...Array.from({ length: 7 }, () => ({ wch: 22 })),
+    ...Array.from({ length: 9 }, () => ({ wch: 22 })),
   ];
 
   const sampleRows = Array.from(sampleCounts.entries()).map(
@@ -750,6 +782,26 @@ export async function buildPlateWorkbook(
     ["孔板名称 / Plate name", plateName(plate)],
     ["孔板编号 / Plate number", plate.plateNumber],
     ["孔板规格 / Plate format", `${context.plateType} 孔 / wells`],
+    [
+      "引物液浓度（实际移取）/ Primer solution used",
+      `${context.reactionSystem.primerStockConcentrationUm} µM`,
+    ],
+    [
+      "上/下游引物终浓度 / Forward/reverse primer final",
+      `F ${roundedVolume(
+        primerFinalConcentrationNm(
+          context.reactionSystem.primerStockConcentrationUm,
+          context.reactionSystem.forwardPrimerPerWellUl,
+          context.reactionSystem.totalPerWellUl,
+        ),
+      )} nM; R ${roundedVolume(
+        primerFinalConcentrationNm(
+          context.reactionSystem.primerStockConcentrationUm,
+          context.reactionSystem.reversePrimerPerWellUl,
+          context.reactionSystem.totalPerWellUl,
+        ),
+      )} nM`,
+    ],
     ["上样方式 / Loading pattern", loadingPatternLabel(context)],
     [
       "上样行序 / Loading row order",

@@ -31,7 +31,9 @@ test("plate workbook exports bilingual reaction totals and scoped requirement sh
     repeatedReferenceWells: 0,
     reactionSystem: {
       cdnaPerWellUl: 1,
-      primerPairPerWellUl: 0.8,
+      forwardPrimerPerWellUl: 0.3,
+      reversePrimerPerWellUl: 0.5,
+      primerStockConcentrationUm: 10,
       masterMixPerWellUl: 5,
       totalPerWellUl: 10,
       overagePercent: 10,
@@ -57,6 +59,12 @@ test("plate workbook exports bilingual reaction totals and scoped requirement sh
   assert.equal(workbook.Sheets.Total_Requirements.C4.v, 528);
   assert.equal(workbook.Sheets.Gene_Requirements.A1.v, "范围 / Scope");
   assert.equal(workbook.Sheets.Sample_cDNA.A1.v, "范围 / Scope");
+  assert.equal(
+    workbook.Sheets.Gene_Requirements.H1.v,
+    "上游引物终浓度 / Forward primer final (nM)",
+  );
+  assert.equal(workbook.Sheets.Gene_Requirements.H2.v, 300);
+  assert.equal(workbook.Sheets.Gene_Requirements.I2.v, 500);
   assert.equal(workbook.Sheets.Well_Detail.A1.v, "孔板名称 / Plate name");
   assert.equal(workbook.Sheets.Well_Detail.B1.v, "孔板编号 / Plate number");
   assert.match(workbook.Sheets.Plate_Map.A1.v, /Main run \/ 主实验 \(Plate 01\)/);
@@ -70,6 +78,49 @@ test("plate workbook exports bilingual reaction totals and scoped requirement sh
       (row) =>
         row[0] === "特别说明 / Special note" &&
         String(row[1]).includes("Controls are not added automatically"),
+    ),
+  );
+  assert.ok(
+    summaryRows.some(
+      (row) =>
+        row[0] ===
+          "引物液浓度（实际移取）/ Primer solution used" &&
+        row[1] === "10 µM",
+    ),
+  );
+  assert.ok(
+    summaryRows.some(
+      (row) =>
+        row[0] ===
+          "上/下游引物终浓度 / Forward/reverse primer final" &&
+        row[1] === "F 300 nM; R 500 nM",
+    ),
+  );
+
+  const reactionRows = XLSX.utils.sheet_to_json<Array<string | number>>(
+    workbook.Sheets.Reaction_Setup,
+    { header: 1 },
+  );
+  assert.ok(
+    reactionRows.some(
+      (row) =>
+        row[0] ===
+          "引物液浓度（实际移取）/ Primer solution used (µM)" &&
+        row[1] === 10,
+    ),
+  );
+  assert.ok(
+    reactionRows.some(
+      (row) =>
+        row[0] === "上游引物终浓度 / Forward primer final (nM)" &&
+        row[1] === 300,
+    ),
+  );
+  assert.ok(
+    reactionRows.some(
+      (row) =>
+        row[0] === "下游引物终浓度 / Reverse primer final (nM)" &&
+        row[1] === 500,
     ),
   );
   assert.ok(
@@ -149,7 +200,9 @@ test("384-well interleaved export follows physical A-P rows and records both 8-c
     repeatedReferenceWells: 0,
     reactionSystem: {
       cdnaPerWellUl: 1,
-      primerPairPerWellUl: 0.8,
+      forwardPrimerPerWellUl: 0.4,
+      reversePrimerPerWellUl: 0.4,
+      primerStockConcentrationUm: 10,
       masterMixPerWellUl: 5,
       totalPerWellUl: 10,
       overagePercent: 10,
@@ -271,7 +324,9 @@ test("Blank wells use zero cDNA and replace template volume with water", async (
     repeatedReferenceWells: 0,
     reactionSystem: {
       cdnaPerWellUl: 1,
-      primerPairPerWellUl: 0.8,
+      forwardPrimerPerWellUl: 0.4,
+      reversePrimerPerWellUl: 0.4,
+      primerStockConcentrationUm: 10,
       masterMixPerWellUl: 5,
       totalPerWellUl: 10,
       overagePercent: 10,

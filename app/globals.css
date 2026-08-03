@@ -1199,7 +1199,7 @@ select:focus-visible,
 
 .reaction-input-primary {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -1228,6 +1228,56 @@ select:focus-visible,
   min-height: auto;
   color: var(--ink);
   font-size: 10px;
+}
+
+.reaction-primer-setting {
+  display: grid;
+  padding-top: 10px;
+  border-top: 1px solid #dce3eb;
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 0.75fr);
+  gap: 10px;
+}
+
+.primer-final-preview {
+  display: grid;
+  min-width: 0;
+  min-height: 58px;
+  align-content: center;
+  gap: 5px;
+  padding: 7px 9px;
+  border: 1px solid rgba(61, 74, 99, 0.12);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.primer-final-preview > span {
+  color: var(--ink-secondary);
+  font-size: 9px;
+  line-height: 1.35;
+}
+
+.primer-final-values {
+  display: grid;
+  gap: 2px;
+}
+
+.primer-final-values strong {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  color: var(--action);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.primer-final-values span {
+  color: var(--ink-secondary);
+  font: inherit;
 }
 
 .reaction-numeric-input {
@@ -2179,7 +2229,7 @@ select:focus-visible,
   }
 
   .reaction-input-primary {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .modal-backdrop {
@@ -2238,7 +2288,11 @@ select:focus-visible,
   }
 
   .reaction-input-primary {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .reaction-primer-setting {
+    grid-template-columns: 1fr;
   }
 
   .reagent-summary-grid {

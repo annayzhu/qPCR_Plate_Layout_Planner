@@ -48,16 +48,22 @@ const COPY = {
     title: "反应体系与用量",
     wells: (count: number) => `${count} 孔`,
     cdnaInput: "每孔 cDNA · µL",
-    primerInput: "每孔上下游引物合计 · µL",
+    forwardPrimerInput: "每孔上游引物 · µL",
+    reversePrimerInput: "每孔下游引物 · µL",
+    primerStockInput: "引物液浓度（实际移取）· µM",
+    primerFinalPreview: "每条引物终浓度",
     masterMixInput: "每孔反应预混液 · µL",
     totalInput: "每孔反应总体积 · µL",
     overageInput: "配液余量 · %",
     splitNote: (overage: number) =>
-      `上、下游引物按等体积分配；建议准备量已包含 ${overage}% 移液余量。`,
+      `上、下游引物体积分别填写；建议准备量已包含 ${overage}% 移液余量。`,
+    primerStockNote:
+      "当前假设上、下游引物液浓度相同。请填写实际移入反应孔的浓度；若先将 100 µM 原始储备液稀释为 10 µM 工作液，应填写 10 µM。",
     blankNote: "Blank 孔不加入 cDNA，以等体积 RNase-free ddH₂O 补足。",
     perWellTitle: "每孔反应体系",
     component: "组分",
     perWellVolume: "µL / 孔",
+    finalConcentration: "终浓度 · nM",
     total: "总体积",
     reagentLabels: {
       masterMix: "SYBR Green 反应预混液",
@@ -68,7 +74,8 @@ const COPY = {
     },
     totalsTitle: "反应用量总览",
     masterMixTotal: "需准备的预混液总量",
-    primerTotal: "需准备的引物合计",
+    forwardPrimerTotal: "需准备的上游引物",
+    reversePrimerTotal: "需准备的下游引物",
     cdnaTotal: "需准备的 cDNA 合计",
     waterTotal: "需准备的水合计",
     theoreticalTotal: "理论反应总体积",
@@ -90,12 +97,12 @@ const COPY = {
     replacementWater: "Blank 补水 · µL",
     blank: "空白",
     routineCheck: "常规核查",
-    primerBoundary:
-      "未输入引物储备液浓度，因此只能核算体积，不能判断每条引物的终浓度。",
+    primerCheck: (stock: string, forward: string, reverse: string) =>
+      `上、下游引物液浓度均为 ${stock} µM；按各自输入体积计算，当前终浓度分别为 ${forward} nM 和 ${reverse} nM。是否适用仍需结合试剂说明书和引物优化结果判断。`,
     cdnaBoundary:
       "未输入 cDNA 浓度和逆转录稀释倍数，因此不能换算原始 RNA 或组织样本量。",
     defaults:
-      "初始值为 10 µL 体系、5 µL 预混液、上下游引物各 0.4 µL、cDNA 1 µL 和 10% 余量；其他体系请参考试剂说明书。请另行预留 NTC、no-RT 等控制孔，并核查单一熔解峰、扩增效率及内参稳定性；控制孔未自动计入当前用量。",
+      "初始值为 10 µL 体系、5 µL 预混液、10 µM 引物液、上下游引物各 0.4 µL（每条终浓度 400 nM）、cDNA 1 µL 和 10% 余量；其他体系请参考试剂说明书。请另行预留 NTC、no-RT 等控制孔，并核查单一熔解峰、扩增效率及内参稳定性；控制孔未自动计入当前用量。",
     sources: "来源核查：",
     reference: "内参",
   },
@@ -104,17 +111,23 @@ const COPY = {
     title: "Reaction setup & requirements",
     wells: (count: number) => `${count} wells`,
     cdnaInput: "cDNA per well · µL",
-    primerInput: "Combined primers per well · µL",
+    forwardPrimerInput: "Forward primer per well · µL",
+    reversePrimerInput: "Reverse primer per well · µL",
+    primerStockInput: "Primer solution used · µM",
+    primerFinalPreview: "Final concentration per primer",
     masterMixInput: "Master mix per well · µL",
     totalInput: "Total volume per well · µL",
     overageInput: "Pipetting overage · %",
     splitNote: (overage: number) =>
-      `Forward and reverse primers are split equally by volume. Preparation amounts include ${overage}% pipetting overage.`,
+      `Forward and reverse primer volumes are entered separately. Preparation amounts include ${overage}% pipetting overage.`,
+    primerStockNote:
+      "The forward and reverse primer solutions are assumed to have the same concentration. Enter the concentration actually pipetted into the reaction; if a 100 µM master stock is first diluted to 10 µM, enter 10 µM.",
     blankNote:
       "Blank wells receive no cDNA; the same volume is replaced with RNase-free water.",
     perWellTitle: "Per-well reaction",
     component: "Component",
     perWellVolume: "µL / well",
+    finalConcentration: "Final concentration · nM",
     total: "Total volume",
     reagentLabels: {
       masterMix: "SYBR Green master mix",
@@ -125,7 +138,8 @@ const COPY = {
     },
     totalsTitle: "Total requirements",
     masterMixTotal: "Master mix to prepare",
-    primerTotal: "Combined primers to prepare",
+    forwardPrimerTotal: "Forward primer to prepare",
+    reversePrimerTotal: "Reverse primer to prepare",
     cdnaTotal: "cDNA to prepare",
     waterTotal: "Water to prepare",
     theoreticalTotal: "Theoretical reaction volume",
@@ -147,28 +161,29 @@ const COPY = {
     replacementWater: "Blank water · µL",
     blank: "Blank",
     routineCheck: "Routine check",
-    primerBoundary:
-      "Primer stock concentrations were not entered, so volumes can be calculated but the final concentration of each primer cannot be assessed.",
+    primerCheck: (stock: string, forward: string, reverse: string) =>
+      `Both primer solutions are ${stock} µM. Using their separately entered volumes, the current forward and reverse final concentrations are ${forward} nM and ${reverse} nM. Confirm suitability against the reagent instructions and assay optimization.`,
     cdnaBoundary:
       "cDNA concentration and reverse-transcription dilution factor were not entered, so the result cannot be converted to the amount of starting RNA or tissue.",
     defaults:
-      "Defaults are a 10 µL reaction, 5 µL master mix, 0.4 µL each forward and reverse primer, 1 µL cDNA, and 10% overage. For other reaction setups, consult the reagent instructions. Reserve NTC and no-RT control wells separately, and verify a single melt peak, amplification efficiency, and reference-gene stability; control wells are not included automatically.",
+      "Defaults are a 10 µL reaction, 5 µL master mix, 10 µM primer solutions, 0.4 µL each forward and reverse primer (400 nM final each), 1 µL cDNA, and 10% overage. For other reaction setups, consult the reagent instructions. Reserve NTC and no-RT control wells separately, and verify a single melt peak, amplification efficiency, and reference-gene stability; control wells are not included automatically.",
     sources: "Sources checked:",
     reference: "Reference",
   },
 } as const;
 
-const STATIC_BOUNDARY_WARNING_MARKERS = [
-  "未输入引物储备液浓度",
-  "Primer stock concentration is not entered",
-  "未输入 cDNA 浓度和逆转录稀释倍数",
-  "Without cDNA concentration and RT dilution",
-];
-
 function formatVolume(value: number) {
   if (!Number.isFinite(value)) return "—";
   if (value === 0) return "0.00";
   if (Math.abs(value) < 0.01) return value.toFixed(3);
+  return value.toFixed(2);
+}
+
+function formatConcentrationNm(value: number) {
+  if (!Number.isFinite(value)) return "—";
+  if (value === 0) return "0";
+  if (Math.abs(value) >= 100) return value.toFixed(0);
+  if (Math.abs(value) >= 10) return value.toFixed(1);
   return value.toFixed(2);
 }
 
@@ -181,7 +196,21 @@ function localizeMessage(message: string, language: Language) {
   if (separatorIndex === -1) return message;
 
   const labelCopies = [
-    ["引物总体积 / primer-pair volume", "引物总体积", "Primer-pair volume"],
+    [
+      "上游引物体积 / forward-primer volume",
+      "上游引物体积",
+      "Forward-primer volume",
+    ],
+    [
+      "下游引物体积 / reverse-primer volume",
+      "下游引物体积",
+      "Reverse-primer volume",
+    ],
+    [
+      "引物液浓度 / primer stock concentration",
+      "引物液浓度",
+      "Primer solution concentration",
+    ],
     ["反应预混液 / master mix", "反应预混液", "Master-mix volume"],
     ["反应总体积 / total reaction volume", "反应总体积", "Total reaction volume"],
     ["配液余量 / pipetting overage", "配液余量", "Pipetting overage"],
@@ -290,12 +319,7 @@ export function ReactionCalculator({
     genes,
     blankNames,
   );
-  const dynamicWarnings = calculation.warnings.filter(
-    (warning) =>
-      !STATIC_BOUNDARY_WARNING_MARKERS.some((marker) =>
-        warning.includes(marker),
-      ),
-  );
+  const dynamicWarnings = calculation.warnings;
 
   function update(
     key: keyof ReactionSystemInput,
@@ -328,18 +352,29 @@ export function ReactionCalculator({
           onCommit={(nextValue) => update("cdnaPerWellUl", nextValue)}
         />
         <NumericField
-          label={copy.primerInput}
-          min={0}
-          step={0.1}
-          value={value.primerPairPerWellUl}
-          onCommit={(nextValue) => update("primerPairPerWellUl", nextValue)}
-        />
-        <NumericField
           label={copy.masterMixInput}
           min={0}
           step={0.1}
           value={value.masterMixPerWellUl}
           onCommit={(nextValue) => update("masterMixPerWellUl", nextValue)}
+        />
+        <NumericField
+          label={copy.forwardPrimerInput}
+          min={0}
+          step={0.1}
+          value={value.forwardPrimerPerWellUl}
+          onCommit={(nextValue) =>
+            update("forwardPrimerPerWellUl", nextValue)
+          }
+        />
+        <NumericField
+          label={copy.reversePrimerInput}
+          min={0}
+          step={0.1}
+          value={value.reversePrimerPerWellUl}
+          onCommit={(nextValue) =>
+            update("reversePrimerPerWellUl", nextValue)
+          }
         />
       </div>
 
@@ -359,12 +394,44 @@ export function ReactionCalculator({
           value={value.overagePercent}
           onCommit={(nextValue) => update("overagePercent", nextValue)}
         />
+        <div className="reaction-primer-setting">
+          <NumericField
+            label={copy.primerStockInput}
+            min={0.1}
+            step={0.1}
+            value={value.primerStockConcentrationUm}
+            onCommit={(nextValue) =>
+              update("primerStockConcentrationUm", nextValue)
+            }
+          />
+          <div className="primer-final-preview" aria-live="polite">
+            <span>{copy.primerFinalPreview}</span>
+            <div className="primer-final-values">
+              <strong>
+                <span>F</span>
+                {formatConcentrationNm(
+                  calculation.forwardPrimerFinalConcentrationNm,
+                )}{" "}
+                nM
+              </strong>
+              <strong>
+                <span>R</span>
+                {formatConcentrationNm(
+                  calculation.reversePrimerFinalConcentrationNm,
+                )}{" "}
+                nM
+              </strong>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div className="reaction-note">
         <Info size={14} aria-hidden="true" />
         <span>
           {copy.splitNote(value.overagePercent)}
+          <br />
+          {copy.primerStockNote}
           {blankNames.length > 0 && (
             <>
               <br />
@@ -410,6 +477,7 @@ export function ReactionCalculator({
               <tr>
                 <th>{copy.component}</th>
                 <th>{copy.perWellVolume}</th>
+                <th>{copy.finalConcentration}</th>
               </tr>
             </thead>
             <tbody>
@@ -417,11 +485,23 @@ export function ReactionCalculator({
                 <tr key={row.key}>
                   <td>{copy.reagentLabels[row.key]}</td>
                   <td>{formatVolume(row.volumeUl)}</td>
+                  <td>
+                    {row.key === "forwardPrimer"
+                      ? formatConcentrationNm(
+                          calculation.forwardPrimerFinalConcentrationNm,
+                        )
+                      : row.key === "reversePrimer"
+                        ? formatConcentrationNm(
+                            calculation.reversePrimerFinalConcentrationNm,
+                          )
+                        : "—"}
+                  </td>
                 </tr>
               ))}
               <tr className="total-row">
                 <td>{copy.total}</td>
                 <td>{formatVolume(value.totalPerWellUl)}</td>
+                <td>—</td>
               </tr>
             </tbody>
           </table>
@@ -440,9 +520,15 @@ export function ReactionCalculator({
                 </strong>
               </div>
               <div>
-                <span>{copy.primerTotal}</span>
+                <span>{copy.forwardPrimerTotal}</span>
                 <strong>
-                  {formatVolume(calculation.totals.primerPairUl)} µL
+                  {formatVolume(calculation.totals.forwardPrimerUl)} µL
+                </strong>
+              </div>
+              <div>
+                <span>{copy.reversePrimerTotal}</span>
+                <strong>
+                  {formatVolume(calculation.totals.reversePrimerUl)} µL
                 </strong>
               </div>
               <div>
@@ -576,7 +662,17 @@ export function ReactionCalculator({
         <Droplets size={15} aria-hidden="true" />
         <div>
           <strong>{copy.routineCheck}</strong>
-          <p>{copy.primerBoundary}</p>
+          <p>
+            {copy.primerCheck(
+              formatEditableNumber(value.primerStockConcentrationUm),
+              formatConcentrationNm(
+                calculation.forwardPrimerFinalConcentrationNm,
+              ),
+              formatConcentrationNm(
+                calculation.reversePrimerFinalConcentrationNm,
+              ),
+            )}
+          </p>
           <p>{copy.cdnaBoundary}</p>
           <p>{copy.defaults}</p>
           <p>

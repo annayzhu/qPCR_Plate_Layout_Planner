@@ -5,6 +5,7 @@ import {
   mkdir,
   mkdtemp,
   readdir,
+  rename,
   rm,
 } from "node:fs/promises";
 import os from "node:os";
@@ -17,7 +18,6 @@ const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const projectDirectory = path.resolve(scriptDirectory, "..");
 const outputRoot = path.join(projectDirectory, "outputs", "portable");
 const folderName = "RT-qPCR_Plate_Planner_Portable";
-const outputDirectory = path.join(outputRoot, folderName);
 const htmlFilename = "Open_RT-qPCR_Plate_Planner.html";
 const readmeFilename = "README_CN_EN.txt";
 const versionFilename = "VERSION.txt";
@@ -26,6 +26,7 @@ const temporaryDirectory = await mkdtemp(
   path.join(os.tmpdir(), "qpcr-portable-"),
 );
 const javascriptPath = path.join(temporaryDirectory, "portable-app.js");
+let pendingZipPath = null;
 
 function dateStamp(date = new Date()) {
   return [
@@ -216,6 +217,8 @@ RT-qPCR (SYBR Green) Plate Layout Planner | Offline Portable Edition
   The 384-well default follows a fixed 9 mm 8-channel route: A/C/E/G/I/K/M/O, then B/D/F/H/J/L/N/P. Select sequential loading for 4.5 mm, automated, or single-channel workflows.
 - 隔行模式假设样本源板按输入顺序从 A–H 向下放置，再移到下一列。
   Interleaved mode assumes the source plate follows the sample input order down A–H, then advances to the next column.
+- 反应计算器默认按实际移取的 10 µM 引物液计算终浓度；默认 10 µL 体系、每条引物 0.4 µL 时，终浓度为 400 nM。
+  The calculator defaults to 10 µM primer solutions as pipetted. At 0.4 µL per primer in a 10 µL reaction, each primer is 400 nM final.
 - Thermo Fisher 与 Bio-Rad 的来源链接需要联网时才能打开，不影响其他功能。
   The Thermo Fisher and Bio-Rad source links require internet access; all other features remain available offline.
 - “保存”使用当前电脑、当前浏览器的本地存储。更换浏览器、移动或重命名 HTML 后，原先保存的草稿可能不会自动出现。
@@ -232,27 +235,6 @@ RT-qPCR (SYBR Green) Plate Layout Planner | Offline Portable Edition
 格式：单文件离线 HTML（CSS、JavaScript 及 Excel 导出组件均已内嵌）
 `;
 
-  await rm(outputDirectory, { recursive: true, force: true });
-  await mkdir(outputDirectory, { recursive: true });
-  await Promise.all([
-    writeFile(path.join(outputDirectory, htmlFilename), html, "utf8"),
-    writeFile(
-      path.join(outputDirectory, readmeFilename),
-      withUtf8Bom(readme),
-      "utf8",
-    ),
-    writeFile(
-      path.join(outputDirectory, versionFilename),
-      withUtf8Bom(version),
-      "utf8",
-    ),
-    writeFile(
-      path.join(outputDirectory, licenseFilename),
-      withUtf8Bom(thirdPartyLicenses),
-      "utf8",
-    ),
-  ]);
-
   const zip = new JSZip();
   const zipFolder = zip.folder(folderName);
   zipFolder.file(htmlFilename, html);
@@ -267,18 +249,63 @@ RT-qPCR (SYBR Green) Plate Layout Planner | Offline Portable Edition
     compression: "DEFLATE",
     compressionOptions: { level: 9 },
   });
-  const zipPath = path.join(
+  const expectedEntries = [
+    `${folderName}/`,
+    `${folderName}/${htmlFilename}`,
+    `${folderName}/${readmeFilename}`,
+    `${folderName}/${versionFilename}`,
+    `${folderName}/${licenseFilename}`,
+  ];
+  const verifiedZip = await JSZip.loadAsync(zipBuffer);
+  const archivedEntries = Object.keys(verifiedZip.files);
+  if (JSON.stringify(archivedEntries) !== JSON.stringify(expectedEntries)) {
+    throw new Error("Portable ZIP validation failed: unexpected file list.");
+  }
+
+  await mkdir(outputRoot, { recursive: true });
+  const zipFilename = `${folderName}_${buildDate}.zip`;
+  const zipPath = path.join(outputRoot, zipFilename);
+  pendingZipPath = path.join(
     outputRoot,
-    `${folderName}_${buildDate}.zip`,
+    `.${zipFilename}.${process.pid}.tmp`,
   );
-  await writeFile(zipPath, zipBuffer);
+  await writeFile(pendingZipPath, zipBuffer);
+  await rename(pendingZipPath, zipPath);
+  pendingZipPath = null;
+
+  const datedZipPattern = new RegExp(
+    `^${folderName}_\\d{8}\\.zip$`,
+    "u",
+  );
+  const staleTemporaryPattern = new RegExp(
+    `^\\.${folderName}_\\d{8}\\.zip\\.\\d+\\.tmp$`,
+    "u",
+  );
+  const outputEntries = await readdir(outputRoot, { withFileTypes: true });
+  for (const entry of outputEntries) {
+    const entryPath = path.join(outputRoot, entry.name);
+    if (entry.name === folderName && entry.isDirectory()) {
+      await rm(entryPath, { recursive: true, force: true });
+    } else if (entry.name === ".DS_Store" && entry.isFile()) {
+      await rm(entryPath, { force: true });
+    } else if (
+      entry.isFile() &&
+      datedZipPattern.test(entry.name) &&
+      entry.name !== zipFilename
+    ) {
+      await rm(entryPath, { force: true });
+    } else if (
+      entry.isFile() &&
+      staleTemporaryPattern.test(entry.name)
+    ) {
+      await rm(entryPath, { force: true });
+    }
+  }
 
   console.log(
     JSON.stringify(
       {
-        folder: outputDirectory,
-        html: path.join(outputDirectory, htmlFilename),
-        zip: zipPath,
+        package: zipPath,
         htmlBytes: Buffer.byteLength(html),
       },
       null,
@@ -286,5 +313,8 @@ RT-qPCR (SYBR Green) Plate Layout Planner | Offline Portable Edition
     ),
   );
 } finally {
+  if (pendingZipPath) {
+    await rm(pendingZipPath, { force: true });
+  }
   await rm(temporaryDirectory, { recursive: true, force: true });
 }

@@ -18,16 +18,16 @@
 
 ## 反应计算 / Reaction calculation
 
-输入每孔 cDNA、上下游引物总体积、反应预混液、反应总体积及配液余量。默认按上下游引物等体积分配：
+输入每孔 cDNA、上游引物、下游引物、反应预混液、反应总体积及配液余量。上、下游引物体积分开填写，并根据实际移入反应孔的引物液浓度分别计算终浓度：
 
 ```text
-Forward primer = primer-pair volume / 2
-Reverse primer = primer-pair volume / 2
-Water = total volume - master mix - primer-pair volume - cDNA
+Forward primer final (nM) = primer solution (µM) × forward volume (µL) / total volume (µL) × 1000
+Reverse primer final (nM) = primer solution (µM) × reverse volume (µL) / total volume (µL) × 1000
+Water = total volume - master mix - forward primer - reverse primer - cDNA
 Prepare volume = required volume × (1 + overage%)
 ```
 
-默认示例为 10 µL 体系：5 µL 预混液、0.4 µL 上游引物、0.4 µL 下游引物、1 µL cDNA、3.2 µL 无核酸酶水及 10% 配液余量。该示例不是品牌固定处方，应以具体试剂说明书和本地 SOP 为准。
+默认示例为 10 µL 体系：5 µL 预混液、10 µM 上、下游引物液各 0.4 µL（每条引物终浓度 400 nM）、1 µL cDNA、3.2 µL 无核酸酶水及 10% 配液余量。若将 100 µM 原始储备液先稀释为 10 µM 工作液再加入反应，应填写 10 µM。该示例不是品牌固定处方，应以具体试剂说明书和本地 SOP 为准。
 
 ## Excel 输出 / Excel output
 
@@ -46,7 +46,7 @@ Prepare volume = required volume × (1 + overage%)
 
 ## 特别说明 / Special note
 
-本工具不自动添加 NTC、no-RT、阳性模板或板间校准样本。未输入引物储备液浓度和 cDNA 浓度时，只核算体积，不能判断引物终浓度或换算原始 RNA/组织样本量。仅供科研使用（RUO）。
+本工具不自动添加 NTC、no-RT、阳性模板或板间校准样本。默认按实际移取的 10 µM 引物液计算每条引物终浓度；未输入 cDNA 浓度和逆转录稀释倍数，因此不能换算原始 RNA/组织样本量。仅供科研使用（RUO）。
 
 ## 本地运行 / Local development
 
