@@ -35,7 +35,9 @@ test("server-renders the qPCR plate planner shell", async () => {
   assert.match(html, /qPCR 板布局规划工具/);
   assert.match(html, /96 \/ 384 孔 · 排板与反应用量/);
   assert.match(html, /选择孔板/);
-  assert.match(html, /添加样本/);
+  assert.match(html, /样本与对照/);
+  assert.match(html, /逐行设置名称及样本类型/);
+  assert.match(html, /添加一行/);
   assert.match(html, /添加检测基因/);
   assert.match(html, /技术复孔/);
   assert.match(html, /按样本排列/);

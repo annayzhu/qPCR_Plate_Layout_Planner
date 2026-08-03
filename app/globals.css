@@ -578,47 +578,144 @@ select:focus-visible,
 
 .sample-list {
   display: grid;
-  max-height: 190px;
-  gap: 7px;
+  max-height: 252px;
+  gap: 8px;
   overflow: auto;
+  padding-right: 2px;
 }
 
 .sample-row {
-  display: flex;
+  display: grid;
   min-width: 0;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
-  padding: 7px 8px 7px 10px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
+  grid-template-columns: minmax(0, 1fr) minmax(96px, 0.58fr) 40px;
+}
+
+.sample-import-area {
+  display: grid;
+  gap: 8px;
+}
+
+.sample-batch-box {
+  min-height: 88px;
   background: var(--surface-raised);
 }
 
-.sample-row.is-blank {
-  border-style: dashed;
-  background: #f5f3ef;
+.sample-import-button {
+  width: 100%;
+  min-height: 42px;
+  justify-content: center;
 }
 
-.sample-name {
-  overflow: hidden;
+.sample-name-input,
+.sample-kind-select {
+  width: 100%;
   min-width: 0;
+  min-height: 40px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--ink);
   font-size: 12px;
+  transition:
+    border-color 150ms ease,
+    box-shadow 150ms ease,
+    background 150ms ease;
+}
+
+.sample-name-input {
+  padding: 8px 11px;
   font-weight: 620;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.sample-row-actions {
-  display: flex;
+.sample-kind-select {
+  padding: 8px 30px 8px 10px;
+  cursor: pointer;
+}
+
+.sample-kind-select.is-blank {
+  background: #f5f1e9;
+  color: #745a38;
+}
+
+.sample-name-input:hover,
+.sample-kind-select:hover {
+  border-color: var(--border-strong);
+}
+
+.sample-name-input:focus,
+.sample-kind-select:focus {
+  border-color: var(--focus);
+  box-shadow: 0 0 0 3px rgba(23, 107, 117, 0.1);
+  outline: 0;
+}
+
+.sample-delete-button {
+  display: grid;
+  width: 40px;
+  height: 40px;
   flex: 0 0 auto;
-  align-items: center;
-  gap: 4px;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--ink-secondary);
+  cursor: pointer;
+  transition:
+    border-color 150ms ease,
+    background 150ms ease,
+    color 150ms ease;
 }
 
-.sample-kind-toggle.blank {
-  background: #e9e6df;
-  color: #625f58;
+.sample-delete-button:hover:not(:disabled) {
+  border-color: #e6bdb8;
+  background: #fff4f2;
+  color: var(--danger);
+}
+
+.sample-delete-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.sample-draft-row {
+  padding-top: 2px;
+  grid-template-columns: minmax(0, 1fr) minmax(96px, 0.58fr) 74px;
+}
+
+.sample-draft-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.sample-draft-actions .sample-delete-button {
+  width: 34px;
+}
+
+.sample-draft-actions .sample-delete-button:first-child:not(:disabled):hover {
+  border-color: #a8c9c7;
+  background: #f0f8f7;
+  color: var(--action);
+}
+
+.sample-add-row {
+  display: inline-flex;
+  width: fit-content;
+  min-height: 34px;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 2px;
+  border: 0;
+  background: transparent;
+  color: var(--action);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 720;
+}
+
+.sample-add-row:hover {
+  color: #0e5962;
 }
 
 .gene-row {
@@ -2339,6 +2436,19 @@ select:focus-visible,
 
   .plate-picker {
     grid-template-columns: 1fr;
+  }
+
+  .sample-row {
+    grid-template-columns: minmax(0, 1fr) 96px 40px;
+  }
+
+  .sample-draft-row {
+    grid-template-columns: minmax(0, 1fr) 96px;
+  }
+
+  .sample-draft-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-end;
   }
 
   .hero-title {

@@ -386,6 +386,9 @@ export function QpcrPlanner() {
   const [loadingPattern, setLoadingPattern] =
     useState<LoadingPattern>("sequential");
   const [sampleInput, setSampleInput] = useState("");
+  const [sampleInputKind, setSampleInputKind] =
+    useState<SampleKind>("sample");
+  const [sampleDraftOpen, setSampleDraftOpen] = useState(false);
   const [geneInput, setGeneInput] = useState("");
   const [samplePaste, setSamplePaste] = useState("");
   const [genePaste, setGenePaste] = useState("");
@@ -426,7 +429,10 @@ export function QpcrPlanner() {
       : message.slice(divider + 3);
   };
   const sampleNames = useMemo(
-    () => samples.map((sample) => sample.name),
+    () =>
+      samples
+        .map((sample) => sample.name.trim())
+        .filter(Boolean),
     [samples],
   );
   const samplePasteNames = useMemo(
@@ -436,8 +442,10 @@ export function QpcrPlanner() {
   const blankSampleNames = useMemo(
     () =>
       samples
-        .filter((sample) => sample.kind === "blank")
-        .map((sample) => sample.name),
+        .filter(
+          (sample) => sample.kind === "blank" && sample.name.trim(),
+        )
+        .map((sample) => sample.name.trim()),
     [samples],
   );
   const blankSampleSet = useMemo(
@@ -490,6 +498,23 @@ export function QpcrPlanner() {
     const issues: string[] = [];
     if (sampleNames.length === 0)
       issues.push(tr("请至少添加 1 个样本", "Add at least one sample"));
+    else if (samples.some((sample) => !sample.name.trim()))
+      issues.push(
+        tr(
+          "请填写所有样本行的名称，或删除空行",
+          "Name every sample row or remove empty rows",
+        ),
+      );
+    else if (
+      new Set(sampleNames.map((sample) => normalizedKey(sample))).size !==
+      sampleNames.length
+    )
+      issues.push(
+        tr(
+          "样本名称不能重复，请修改重复名称",
+          "Sample names must be unique; rename duplicates",
+        ),
+      );
     if (targetGenes.length === 0)
       issues.push(tr("请至少添加 1 个目的基因", "Add at least one target assay"));
     if (referenceGenes.length === 0)
@@ -542,6 +567,8 @@ export function QpcrPlanner() {
     plateType,
     referenceGenes.length,
     replicates,
+    samples,
+    sampleNames,
     sampleNames.length,
     targetGenes.length,
     tr,
@@ -774,7 +801,10 @@ export function QpcrPlanner() {
     markChanged();
   }
 
-  function addSamples(values: string[]) {
+  function addSamples(
+    values: string[],
+    kind: SampleKind = "sample",
+  ) {
     const existing = new Set(
       samples.map((sample) => normalizedKey(sample.name)),
     );
@@ -792,7 +822,7 @@ export function QpcrPlanner() {
       additions.push({
         id: makeId("sample"),
         name: value,
-        kind: "sample",
+        kind,
       });
     }
     if (additions.length > 0) {
@@ -820,6 +850,7 @@ export function QpcrPlanner() {
         ),
       });
     }
+    return additions.length;
   }
 
   function addGenes(values: string[]) {
@@ -867,8 +898,11 @@ export function QpcrPlanner() {
   function submitSample(event: FormEvent) {
     event.preventDefault();
     if (!sampleInput.trim()) return;
-    addSamples([sampleInput]);
-    setSampleInput("");
+    if (addSamples([sampleInput], sampleInputKind) > 0) {
+      setSampleInput("");
+      setSampleInputKind("sample");
+      setSampleDraftOpen(false);
+    }
   }
 
   function submitGene(event: FormEvent) {
@@ -895,6 +929,9 @@ export function QpcrPlanner() {
     ];
     setPlateType(96);
     setSamples(exampleSamples);
+    setSampleInput("");
+    setSampleInputKind("sample");
+    setSampleDraftOpen(false);
     setGenes(exampleGenes);
     setReplicates(3);
     setLayoutPreset("sample-major");
@@ -1109,6 +1146,8 @@ export function QpcrPlanner() {
     setLayoutPreset("sample-major");
     setLoadingPattern("sequential");
     setSampleInput("");
+    setSampleInputKind("sample");
+    setSampleDraftOpen(false);
     setGeneInput("");
     setSamplePaste("");
     setGenePaste("");
@@ -1743,12 +1782,12 @@ export function QpcrPlanner() {
                 <span className="section-index">02</span>
                 <div>
                   <h2 className="panel-title">
-                    {tr("添加样本", "Samples")}
+                    {tr("样本与对照", "Samples & controls")}
                   </h2>
                   <p className="panel-description">
                     {tr(
-                      "逐个输入或从 Excel 粘贴",
-                      "Add individually or paste from Excel",
+                      "逐行设置名称及样本类型",
+                      "Set a name and type for each row",
                     )}
                   </p>
                 </div>
@@ -1759,6 +1798,9 @@ export function QpcrPlanner() {
                   type="button"
                   onClick={() => {
                     setSamples([]);
+                    setSampleInput("");
+                    setSampleInputKind("sample");
+                    setSampleDraftOpen(false);
                     markChanged();
                   }}
                 >
@@ -1767,133 +1809,180 @@ export function QpcrPlanner() {
               )}
             </div>
             <div className="entry-stack">
-              <form className="entry-row" onSubmit={submitSample}>
-                <input
-                  className="input"
-                  value={sampleInput}
-                  onChange={(event) => setSampleInput(event.target.value)}
-                  placeholder={tr("如 Tumor_01", "e.g. Tumor_01")}
-                  aria-label={tr("样本名称", "Sample name")}
+              <div className="sample-import-area">
+                <textarea
+                  className="batch-box sample-batch-box"
+                  value={samplePaste}
+                  onChange={(event) => setSamplePaste(event.target.value)}
+                  placeholder={tr(
+                    "从 Excel 粘贴样本名称，每行一个…",
+                    "Paste sample names from Excel, one per line…",
+                  )}
+                  aria-label={tr("批量粘贴样本", "Paste samples in bulk")}
                 />
                 <button
-                  className="icon-button"
-                  type="submit"
-                  aria-label={tr("添加样本", "Add sample")}
-                  disabled={!sampleInput.trim()}
+                  className="button button-soft sample-import-button"
+                  type="button"
+                  disabled={samplePasteNames.length === 0}
+                  onClick={() => {
+                    addSamples(samplePasteNames);
+                    setSamplePaste("");
+                  }}
                 >
-                  <Plus size={16} />
+                  <Plus size={15} />
+                  {tr(
+                    `导入 ${samplePasteNames.length} 个样本名称`,
+                    `Import ${samplePasteNames.length} sample ${
+                      samplePasteNames.length === 1 ? "name" : "names"
+                    }`,
+                  )}
                 </button>
-              </form>
-              <details className="batch-disclosure">
-                <summary>
-                  <span>
-                    {tr("从 Excel 批量粘贴", "Paste from Excel")}
-                  </span>
-                  <FileSpreadsheet size={14} />
-                </summary>
-                <div className="batch-content">
-                  <textarea
-                    className="batch-box"
-                    value={samplePaste}
-                    onChange={(event) => setSamplePaste(event.target.value)}
-                    placeholder={tr(
-                      "复制一列或多列样本名称\n粘贴到这里",
-                      "Copy one or more columns of sample names\nPaste here",
-                    )}
-                    aria-label={tr("批量粘贴样本", "Paste samples in bulk")}
-                  />
-                  <button
-                    className="button button-soft"
-                    type="button"
-                    disabled={samplePasteNames.length === 0}
-                    onClick={() => {
-                      addSamples(samplePasteNames);
-                      setSamplePaste("");
-                    }}
-                  >
-                    {tr(
-                      `导入 ${samplePasteNames.length} 个样本名称`,
-                      `Import ${samplePasteNames.length} sample ${
-                        samplePasteNames.length === 1 ? "name" : "names"
-                      }`,
-                    )}
-                  </button>
-                </div>
-              </details>
-              {samples.length > 0 ? (
+              </div>
+              {samples.length > 0 && (
                 <div
                   className="sample-list"
                   aria-label={tr("已添加样本", "Added samples")}
                 >
                   {samples.map((sample) => (
-                    <div
-                      className={`sample-row ${
-                        sample.kind === "blank" ? "is-blank" : ""
-                      }`}
-                      key={sample.id}
-                    >
-                      <span className="sample-name" title={sample.name}>
-                        {sample.name}
-                      </span>
-                      <div className="sample-row-actions">
-                        <button
-                          className={`role-toggle sample-kind-toggle ${
-                            sample.kind === "blank" ? "blank" : ""
-                          }`}
-                          type="button"
-                          onClick={() => {
-                            setSamples((current) =>
-                              current.map((item) =>
-                                item.id === sample.id
-                                  ? {
-                                      ...item,
-                                      kind:
-                                        item.kind === "sample"
-                                          ? "blank"
-                                          : "sample",
-                                    }
-                                  : item,
-                              ),
-                            );
-                            markChanged();
-                          }}
-                          aria-label={tr(
-                            `将 ${sample.name} 切换为${
-                              sample.kind === "sample" ? "Blank" : "样本"
-                            }`,
-                            `Change ${sample.name} to ${
-                              sample.kind === "sample" ? "Blank" : "Sample"
-                            }`,
-                          )}
-                        >
-                          {sample.kind === "blank"
-                            ? "Blank"
-                            : tr("样本", "Sample")}
-                        </button>
-                        <button
-                          className="chip-remove"
-                          type="button"
-                          onClick={() => {
-                            setSamples((current) =>
-                              current.filter((item) => item.id !== sample.id),
-                            );
-                            markChanged();
-                          }}
-                          aria-label={tr(
-                            `删除样本 ${sample.name}`,
-                            `Remove sample ${sample.name}`,
-                          )}
-                        >
-                          <X size={11} />
-                        </button>
-                      </div>
+                    <div className="sample-row" key={sample.id}>
+                      <input
+                        className="sample-name-input"
+                        value={sample.name}
+                        onChange={(event) => {
+                          const nextName = event.target.value;
+                          setSamples((current) =>
+                            current.map((item) =>
+                              item.id === sample.id
+                                ? { ...item, name: nextName }
+                                : item,
+                            ),
+                          );
+                          markChanged();
+                        }}
+                        onBlur={(event) => {
+                          const trimmedName = event.target.value.trim();
+                          if (trimmedName === event.target.value) return;
+                          setSamples((current) =>
+                            current.map((item) =>
+                              item.id === sample.id
+                                ? { ...item, name: trimmedName }
+                                : item,
+                            ),
+                          );
+                        }}
+                        placeholder={tr("样本名称", "Sample name")}
+                        aria-label={tr(
+                          `样本名称：${sample.name || "未填写"}`,
+                          `Sample name: ${sample.name || "empty"}`,
+                        )}
+                      />
+                      <select
+                        className={`sample-kind-select ${
+                          sample.kind === "blank" ? "is-blank" : ""
+                        }`}
+                        value={sample.kind}
+                        onChange={(event) => {
+                          const nextKind = event.target.value as SampleKind;
+                          setSamples((current) =>
+                            current.map((item) =>
+                              item.id === sample.id
+                                ? { ...item, kind: nextKind }
+                                : item,
+                            ),
+                          );
+                          markChanged();
+                        }}
+                        aria-label={tr(
+                          `${sample.name || "当前行"}的类型`,
+                          `Type for ${sample.name || "this row"}`,
+                        )}
+                      >
+                        <option value="sample">{tr("样本", "Sample")}</option>
+                        <option value="blank">Blank</option>
+                      </select>
+                      <button
+                        className="sample-delete-button"
+                        type="button"
+                        onClick={() => {
+                          setSamples((current) =>
+                            current.filter((item) => item.id !== sample.id),
+                          );
+                          markChanged();
+                        }}
+                        aria-label={tr(
+                          `删除样本 ${sample.name}`,
+                          `Remove sample ${sample.name}`,
+                        )}
+                      >
+                        <Trash2 size={15} />
+                      </button>
                     </div>
                   ))}
                 </div>
-              ) : (
+              )}
+              {samples.length === 0 && !sampleDraftOpen && (
                 <p className="microcopy">
                   {tr("尚未添加样本", "No samples added")}
                 </p>
+              )}
+              {sampleDraftOpen ? (
+                <form
+                  className="sample-row sample-draft-row"
+                  onSubmit={submitSample}
+                >
+                  <input
+                    className="sample-name-input"
+                    value={sampleInput}
+                    onChange={(event) => setSampleInput(event.target.value)}
+                    placeholder={tr("输入样本名称", "Enter sample name")}
+                    aria-label={tr("新样本名称", "New sample name")}
+                    autoFocus
+                  />
+                  <select
+                    className={`sample-kind-select ${
+                      sampleInputKind === "blank" ? "is-blank" : ""
+                    }`}
+                    value={sampleInputKind}
+                    onChange={(event) =>
+                      setSampleInputKind(event.target.value as SampleKind)
+                    }
+                    aria-label={tr("新样本类型", "New sample type")}
+                  >
+                    <option value="sample">{tr("样本", "Sample")}</option>
+                    <option value="blank">Blank</option>
+                  </select>
+                  <div className="sample-draft-actions">
+                    <button
+                      className="sample-delete-button"
+                      type="submit"
+                      disabled={!sampleInput.trim()}
+                      aria-label={tr("确认添加此行", "Add this row")}
+                    >
+                      <Check size={15} />
+                    </button>
+                    <button
+                      className="sample-delete-button"
+                      type="button"
+                      onClick={() => {
+                        setSampleInput("");
+                        setSampleInputKind("sample");
+                        setSampleDraftOpen(false);
+                      }}
+                      aria-label={tr("取消添加此行", "Cancel this row")}
+                    >
+                      <X size={15} />
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                <button
+                  className="sample-add-row"
+                  type="button"
+                  onClick={() => setSampleDraftOpen(true)}
+                >
+                  <Plus size={16} />
+                  {tr("添加一行", "Add row")}
+                </button>
               )}
             </div>
           </section>
@@ -2295,10 +2384,10 @@ export function QpcrPlanner() {
             <div className="setup-summary">
               <strong>
                 {tr(
-                  `${samples.length} 样本 × ${genes.length} 基因 × ${
+                  `${sampleNames.length} 样本 × ${genes.length} 基因 × ${
                     replicates || 0
                   } 复孔`,
-                  `${samples.length} samples × ${genes.length} assays × ${
+                  `${sampleNames.length} samples × ${genes.length} assays × ${
                     replicates || 0
                   } replicates`,
                 )}
@@ -3099,7 +3188,7 @@ export function QpcrPlanner() {
                   </section>
                   <ReactionCalculator
                     layout={layout}
-                    samples={samples}
+                    samples={samples.filter((sample) => sample.name.trim())}
                     genes={genes.map((gene) => ({
                       name: gene.name,
                       role: gene.role,
@@ -3229,12 +3318,14 @@ export function QpcrPlanner() {
                         )
                       }
                     >
-                      {samples.map((sample) => (
-                        <option value={sample.name} key={sample.id}>
-                          {sample.name}
-                          {sample.kind === "blank" ? " · Blank" : ""}
-                        </option>
-                      ))}
+                      {samples
+                        .filter((sample) => sample.name.trim())
+                        .map((sample) => (
+                          <option value={sample.name} key={sample.id}>
+                            {sample.name}
+                            {sample.kind === "blank" ? " · Blank" : ""}
+                          </option>
+                        ))}
                     </select>
                   </label>
                   <label className="field">
