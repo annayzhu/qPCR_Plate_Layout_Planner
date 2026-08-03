@@ -1,7 +1,10 @@
 import type {
   GeneType,
+  LoadingPattern,
   PlanResult,
 } from "./platePlanner";
+
+export type GeneMixPreparationMode = "single-tube" | "eight-strip";
 
 export interface ReactionSystemInput {
   cdnaPerWellUl: number;
@@ -12,6 +15,7 @@ export interface ReactionSystemInput {
   masterMixPerWellUl: number;
   totalPerWellUl: number;
   overagePercent: number;
+  geneMixPreparationMode: GeneMixPreparationMode;
 }
 
 export const DEFAULT_REACTION_SYSTEM: ReactionSystemInput = {
@@ -22,6 +26,7 @@ export const DEFAULT_REACTION_SYSTEM: ReactionSystemInput = {
   masterMixPerWellUl: 5,
   totalPerWellUl: 10,
   overagePercent: 10,
+  geneMixPreparationMode: "eight-strip",
 };
 
 export type LegacyReactionSystemInput = Partial<ReactionSystemInput> & {
@@ -49,6 +54,10 @@ export function normalizeReactionSystemInput(
       current.reversePrimerPerWellUl ??
       legacyPrimerPerWell ??
       DEFAULT_REACTION_SYSTEM.reversePrimerPerWellUl,
+    geneMixPreparationMode:
+      current.geneMixPreparationMode === "single-tube"
+        ? "single-tube"
+        : DEFAULT_REACTION_SYSTEM.geneMixPreparationMode,
   };
 }
 
@@ -105,6 +114,43 @@ export interface ReactionCalculation {
   };
 }
 
+export interface EightStripChannelRequirement {
+  channel: string;
+  destinationRows: string;
+  pass1WellCount: number;
+  pass2WellCount: number;
+  wellCount: number;
+  blankWellCount: number;
+  assayMixUl: number;
+  blankReplacementWaterUl: number;
+}
+
+export interface EightStripGeneMixRequirement {
+  plateNumber: number;
+  plateName: string;
+  gene: string;
+  geneType: GeneType;
+  transferCycles: number;
+  channels: EightStripChannelRequirement[];
+  totalAssayMixUl: number;
+  blankReplacementWaterUl: number;
+}
+
+interface EightStripWellLike {
+  row: number;
+  column: number;
+  sample: string | null;
+  gene: string | null;
+  geneType: GeneType | null;
+}
+
+interface EightStripPlateLike {
+  plateNumber: number;
+  name?: string;
+  rows: number;
+  wells: EightStripWellLike[];
+}
+
 const EPSILON = 1e-9;
 
 function isNonNegativeFinite(value: number) {
@@ -128,6 +174,116 @@ export function primerFinalConcentrationNm(
     (stockConcentrationUm * primerVolumeUl * 1_000) /
     totalReactionVolumeUl
   );
+}
+
+function rowLabel(index: number) {
+  return String.fromCharCode(65 + index);
+}
+
+export function calculateEightStripGeneMixRequirements(
+  plates: EightStripPlateLike[],
+  loadingPattern: LoadingPattern,
+  input: ReactionSystemInput,
+  blankSampleNames: string[] = [],
+): EightStripGeneMixRequirement[] {
+  if (
+    input.geneMixPreparationMode !== "eight-strip" ||
+    loadingPattern !== "interleaved-8-channel"
+  ) {
+    return [];
+  }
+
+  const preparationFactor = 1 + input.overagePercent / 100;
+  const primerVolumeUl =
+    input.forwardPrimerPerWellUl + input.reversePrimerPerWellUl;
+  const waterPerWellUl = Math.max(
+    0,
+    input.totalPerWellUl -
+      input.masterMixPerWellUl -
+      primerVolumeUl -
+      input.cdnaPerWellUl,
+  );
+  const assayMixPerWellUl =
+    input.masterMixPerWellUl + primerVolumeUl + waterPerWellUl;
+  const normalizedBlankNames = new Set(
+    blankSampleNames.map((sample) => sample.trim().toLocaleLowerCase()),
+  );
+  const isBlankSample = (sample: string) =>
+    normalizedBlankNames.has(sample.trim().toLocaleLowerCase());
+  const requirements: EightStripGeneMixRequirement[] = [];
+
+  for (const plate of plates) {
+    if (plate.rows !== 16) continue;
+    const wellsByGene = new Map<
+      string,
+      { geneType: GeneType; wells: EightStripWellLike[] }
+    >();
+    for (const well of plate.wells) {
+      if (!well.sample || !well.gene) continue;
+      const current = wellsByGene.get(well.gene) ?? {
+        geneType: well.geneType ?? "target",
+        wells: [],
+      };
+      current.wells.push(well);
+      wellsByGene.set(well.gene, current);
+    }
+
+    for (const [gene, group] of wellsByGene) {
+      const channelCounts = Array.from({ length: 8 }, (_, index) => ({
+        channel: rowLabel(index),
+        destinationRows: `${rowLabel(index * 2)}/${rowLabel(index * 2 + 1)}`,
+        pass1WellCount: 0,
+        pass2WellCount: 0,
+        wellCount: 0,
+        blankWellCount: 0,
+      }));
+      const transferCycles = new Set<string>();
+
+      for (const well of group.wells) {
+        const channelIndex = Math.floor(well.row / 2);
+        if (channelIndex < 0 || channelIndex >= channelCounts.length) continue;
+        const channel = channelCounts[channelIndex];
+        const transferPass = (well.row % 2) + 1;
+        channel.wellCount += 1;
+        if (transferPass === 1) channel.pass1WellCount += 1;
+        else channel.pass2WellCount += 1;
+        if (well.sample && isBlankSample(well.sample)) {
+          channel.blankWellCount += 1;
+        }
+        transferCycles.add(`${transferPass}:${well.column}`);
+      }
+
+      const channels = channelCounts.map((channel) => ({
+        ...channel,
+        assayMixUl:
+          channel.wellCount * assayMixPerWellUl * preparationFactor,
+        blankReplacementWaterUl:
+          channel.blankWellCount *
+          input.cdnaPerWellUl *
+          preparationFactor,
+      }));
+      requirements.push({
+        plateNumber: plate.plateNumber,
+        plateName:
+          plate.name?.trim() ||
+          `Plate ${String(plate.plateNumber).padStart(2, "0")}`,
+        gene,
+        geneType: group.geneType,
+        transferCycles: transferCycles.size,
+        channels,
+        totalAssayMixUl: channels.reduce(
+          (sum, channel) => sum + channel.assayMixUl,
+          0,
+        ),
+        blankReplacementWaterUl: channels.reduce(
+          (sum, channel) => sum + channel.blankReplacementWaterUl,
+          0,
+        ),
+      });
+    }
+  }
+
+  return requirements;
 }
 
 export function calculateReactionRequirements(

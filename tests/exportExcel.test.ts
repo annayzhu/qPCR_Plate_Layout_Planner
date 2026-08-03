@@ -37,6 +37,7 @@ test("plate workbook exports bilingual reaction totals and scoped requirement sh
       masterMixPerWellUl: 5,
       totalPerWellUl: 10,
       overagePercent: 10,
+      geneMixPreparationMode: "eight-strip",
     },
   };
 
@@ -49,6 +50,7 @@ test("plate workbook exports bilingual reaction totals and scoped requirement sh
     "Plate_Map",
     "Well_Detail",
     "Gene_Requirements",
+    "Gene_8Channel_Setup",
     "Sample_cDNA",
     "Total_Requirements",
     "Design_Summary",
@@ -58,6 +60,7 @@ test("plate workbook exports bilingual reaction totals and scoped requirement sh
   assert.equal(workbook.Sheets.Total_Requirements.B4.v, 480);
   assert.equal(workbook.Sheets.Total_Requirements.C4.v, 528);
   assert.equal(workbook.Sheets.Gene_Requirements.A1.v, "范围 / Scope");
+  assert.equal(workbook.Sheets.Gene_8Channel_Setup.A1.v, "状态 / Status");
   assert.equal(workbook.Sheets.Sample_cDNA.A1.v, "范围 / Scope");
   assert.equal(
     workbook.Sheets.Gene_Requirements.H1.v,
@@ -206,6 +209,7 @@ test("384-well interleaved export follows physical A-P rows and records both 8-c
       masterMixPerWellUl: 5,
       totalPerWellUl: 10,
       overagePercent: 10,
+      geneMixPreparationMode: "eight-strip",
     },
   };
 
@@ -214,6 +218,7 @@ test("384-well interleaved export follows physical A-P rows and records both 8-c
     "Plate_Map",
     "Well_Detail",
     "Gene_Requirements",
+    "Gene_8Channel_Setup",
     "Sample_cDNA",
     "Total_Requirements",
     "Design_Summary",
@@ -228,6 +233,17 @@ test("384-well interleaved export follows physical A-P rows and records both 8-c
   assert.match(mapSheet.B3.v, /^S1\nG1/);
   assert.match(mapSheet.B4.v, /^S9\nG1/);
   assert.match(mapSheet.B5.v, /^S2\nG1/);
+
+  const eightStripSheet = workbook.Sheets.Gene_8Channel_Setup;
+  assert.equal(eightStripSheet.F1.v, "八连排源通道 / Source channel");
+  assert.equal(eightStripSheet.D2.v, "G1");
+  assert.equal(eightStripSheet.F2.v, "A");
+  assert.equal(eightStripSheet.G2.v, "A/B");
+  assert.equal(eightStripSheet.H2.v, 1);
+  assert.equal(eightStripSheet.I2.v, 1);
+  assert.equal(eightStripSheet.J2.v, 2);
+  assert.equal(eightStripSheet.L2.v, 19.8);
+  assert.equal(eightStripSheet.N2.v, 2);
 
   const detailRows = XLSX.utils.sheet_to_json<Record<string, string | number>>(
     workbook.Sheets.Well_Detail,
@@ -330,6 +346,7 @@ test("Blank wells use zero cDNA and replace template volume with water", async (
       masterMixPerWellUl: 5,
       totalPerWellUl: 10,
       overagePercent: 10,
+      geneMixPreparationMode: "eight-strip",
     },
   };
 

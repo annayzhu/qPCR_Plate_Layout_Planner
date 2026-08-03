@@ -100,7 +100,7 @@ interface ToastState {
 }
 
 interface StoredPlannerState {
-  version: 5;
+  version: 6;
   plateType: PlateType;
   samples: SampleEntry[];
   genes: GeneEntry[];
@@ -115,6 +115,14 @@ interface StoredPlannerState {
   reactionSystem?: Partial<ReactionSystemInput>;
   language: Language;
 }
+
+type StoredPlannerStateV5 = Omit<
+  StoredPlannerState,
+  "version" | "reactionSystem"
+> & {
+  version: 5;
+  reactionSystem?: LegacyReactionSystemInput;
+};
 
 type StoredPlannerStateV4 = Omit<
   StoredPlannerState,
@@ -583,6 +591,7 @@ export function QpcrPlanner() {
         if (saved) {
           const parsed = JSON.parse(saved) as
             | StoredPlannerState
+            | StoredPlannerStateV5
             | StoredPlannerStateV4
             | StoredPlannerStateV3
             | StoredPlannerStateV2
@@ -679,7 +688,11 @@ export function QpcrPlanner() {
             );
             setLanguage(parsed.language ?? "zh");
             setSavedAt("restored");
-          } else if (parsed.version === 4 || parsed.version === 5) {
+          } else if (
+            parsed.version === 4 ||
+            parsed.version === 5 ||
+            parsed.version === 6
+          ) {
             const restoredLoadingPattern =
               parsed.plateType === 96
                 ? "sequential"
@@ -1022,7 +1035,7 @@ export function QpcrPlanner() {
 
   function savePlanner() {
     const payload: StoredPlannerState = {
-      version: 5,
+      version: 6,
       plateType,
       samples,
       genes,

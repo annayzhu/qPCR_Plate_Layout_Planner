@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { planPlateLayout } from "../lib/platePlanner";
 import {
+  calculateEightStripGeneMixRequirements,
   calculateReactionRequirements,
   normalizeReactionSystemInput,
   primerFinalConcentrationNm,
@@ -25,6 +26,7 @@ test("calculates a conventional 10 µL per-well SYBR Green system", () => {
       primerStockConcentrationUm: 10,
       cdnaPerWellUl: 1,
       overagePercent: 10,
+      geneMixPreparationMode: "eight-strip",
     },
     ["S1", "S2"],
     [
@@ -73,6 +75,7 @@ test("counts reference reruns from the actual cross-plate layout", () => {
       primerStockConcentrationUm: 10,
       cdnaPerWellUl: 1,
       overagePercent: 10,
+      geneMixPreparationMode: "eight-strip",
     },
     ["S1"],
     [
@@ -112,6 +115,7 @@ test("replaces cDNA with water for Blank wells while preserving assay counts", (
       primerStockConcentrationUm: 10,
       cdnaPerWellUl: 1,
       overagePercent: 10,
+      geneMixPreparationMode: "eight-strip",
     },
     ["S1", "Blank 1"],
     [
@@ -172,6 +176,7 @@ test("rejects a reaction system whose components exceed the total volume", () =>
       primerStockConcentrationUm: 10,
       cdnaPerWellUl: 4.3,
       overagePercent: 10,
+      geneMixPreparationMode: "eight-strip",
     },
     ["S1"],
     [
@@ -207,6 +212,7 @@ test("calculates asymmetric forward and reverse primer inputs independently", ()
       primerStockConcentrationUm: 10,
       cdnaPerWellUl: 1,
       overagePercent: 10,
+      geneMixPreparationMode: "eight-strip",
     },
     ["S1"],
     [
@@ -241,6 +247,7 @@ test("rejects a zero primer solution concentration", () => {
       primerStockConcentrationUm: 0,
       cdnaPerWellUl: 1,
       overagePercent: 10,
+      geneMixPreparationMode: "eight-strip",
     },
     ["S1"],
     [
@@ -262,14 +269,81 @@ test("fills the 10 µM default when restoring a legacy reaction setup", () => {
   assert.equal(restored.forwardPrimerPerWellUl, 0.5);
   assert.equal(restored.reversePrimerPerWellUl, 0.5);
   assert.equal(restored.primerStockConcentrationUm, 10);
+  assert.equal(restored.geneMixPreparationMode, "eight-strip");
 
   const explicit = normalizeReactionSystemInput({
     primerPairPerWellUl: 1,
     forwardPrimerPerWellUl: 0.3,
     reversePrimerPerWellUl: 0.5,
     primerStockConcentrationUm: 20,
+    geneMixPreparationMode: "single-tube",
   });
   assert.equal(explicit.forwardPrimerPerWellUl, 0.3);
   assert.equal(explicit.reversePrimerPerWellUl, 0.5);
   assert.equal(explicit.primerStockConcentrationUm, 20);
+  assert.equal(explicit.geneMixPreparationMode, "single-tube");
+});
+
+test("calculates 384-well A–H assay-mix aliquots from physical interleaved rows", () => {
+  const samples = Array.from({ length: 10 }, (_, index) => `S${index + 1}`);
+  const layout = planPlateLayout(
+    {
+      plateType: 384,
+      samples,
+      targetGenes: ["G1"],
+      referenceGenes: ["R1"],
+      replicates: 3,
+    },
+    {
+      strategy: "gene-major",
+      loadingPattern: "interleaved-8-channel",
+    },
+  );
+  const input = normalizeReactionSystemInput({
+    geneMixPreparationMode: "eight-strip",
+  });
+  const requirements = calculateEightStripGeneMixRequirements(
+    layout.plates,
+    layout.loadingPattern,
+    input,
+    ["S10"],
+  );
+  const target = requirements.find((requirement) => requirement.gene === "G1");
+
+  assert.ok(target);
+  assert.equal(target.transferCycles, 6);
+  assert.equal(target.channels[0].destinationRows, "A/B");
+  assert.equal(target.channels[0].pass1WellCount, 3);
+  assert.equal(target.channels[0].pass2WellCount, 3);
+  assert.equal(target.channels[0].wellCount, 6);
+  assert.ok(Math.abs(target.channels[0].assayMixUl - 59.4) < 1e-9);
+  assert.equal(target.channels[1].blankWellCount, 3);
+  assert.ok(
+    Math.abs(target.channels[1].blankReplacementWaterUl - 3.3) < 1e-9,
+  );
+  assert.equal(target.channels[2].wellCount, 3);
+  assert.ok(Math.abs(target.channels[2].assayMixUl - 29.7) < 1e-9);
+  assert.ok(Math.abs(target.totalAssayMixUl - 297) < 1e-9);
+});
+
+test("does not create eight-strip aliquots in single-tube mode", () => {
+  const layout = planPlateLayout({
+    plateType: 384,
+    samples: ["S1"],
+    targetGenes: ["G1"],
+    referenceGenes: ["R1"],
+    replicates: 3,
+  });
+  const input = normalizeReactionSystemInput({
+    geneMixPreparationMode: "single-tube",
+  });
+
+  assert.deepEqual(
+    calculateEightStripGeneMixRequirements(
+      layout.plates,
+      layout.loadingPattern,
+      input,
+    ),
+    [],
+  );
 });

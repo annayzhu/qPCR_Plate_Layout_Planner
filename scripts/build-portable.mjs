@@ -219,6 +219,8 @@ RT-qPCR (SYBR Green) Plate Layout Planner | Offline Portable Edition
   Interleaved mode assumes the source plate follows the sample input order down A–H, then advances to the next column.
 - 反应计算器默认按实际移取的 10 µM 引物液计算终浓度；默认 10 µL 体系、每条引物 0.4 µL 时，终浓度为 400 nM。
   The calculator defaults to 10 µM primer solutions as pipetted. At 0.4 µL per primer in a 10 µL reaction, each primer is 400 nM final.
+- 384 孔隔行布局可选择 A–H 八连排 gene mix 分装；每管按该通道实际孔数计算，Blank 替代水另行加入。
+  For 384-well interleaved layouts, assay mix can be aliquoted across an A–H 8-tube strip using each channel's actual destination-well count; Blank replacement water is added separately.
 - Thermo Fisher 与 Bio-Rad 的来源链接需要联网时才能打开，不影响其他功能。
   The Thermo Fisher and Bio-Rad source links require internet access; all other features remain available offline.
 - “保存”使用当前电脑、当前浏览器的本地存储。更换浏览器、移动或重命名 HTML 后，原先保存的草稿可能不会自动出现。

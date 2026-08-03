@@ -52,6 +52,8 @@ test("portable HTML is a self-contained classic-script document", async () => {
   assert.doesNotMatch(html, /<script[^>]+\btype=["']module["']/iu);
   assert.doesNotMatch(html, /<link[^>]+\bhref=/iu);
   assert.doesNotMatch(html, /@import\s+["']tailwindcss["']/iu);
+  assert.match(html, /8-tube strip aliquots/u);
+  assert.match(html, /Gene_8Channel_Setup/u);
   assert.ok(
     Buffer.byteLength(html) > 1_000_000,
     "bundled app and export libraries should be present",

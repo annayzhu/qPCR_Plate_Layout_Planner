@@ -1280,6 +1280,68 @@ select:focus-visible,
   font: inherit;
 }
 
+.gene-mix-mode {
+  display: grid;
+  margin-top: 10px;
+  gap: 7px;
+  padding: 10px;
+  border: 1px solid rgba(76, 90, 116, 0.14);
+  border-radius: 10px;
+  background: linear-gradient(135deg, rgba(239, 244, 250, 0.82), rgba(250, 248, 243, 0.92));
+}
+
+.gene-mix-mode-heading {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.gene-mix-mode-heading span {
+  color: var(--ink);
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.gene-mix-mode-heading small {
+  color: var(--ink-secondary);
+  font-size: 8px;
+  text-align: right;
+}
+
+.gene-mix-mode-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.gene-mix-mode-options button {
+  min-width: 0;
+  min-height: 31px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.76);
+  color: var(--ink-secondary);
+  font-size: 9px;
+  line-height: 1.25;
+  cursor: pointer;
+}
+
+.gene-mix-mode-options button.selected {
+  border-color: rgba(72, 88, 122, 0.52);
+  background: #ffffff;
+  color: var(--action);
+  box-shadow: 0 0 0 1px rgba(72, 88, 122, 0.08);
+  font-weight: 750;
+}
+
+.eight-strip-table th,
+.eight-strip-table td {
+  min-width: 64px;
+}
+
 .reaction-numeric-input {
   min-height: 36px;
   padding: 7px 8px;

@@ -8,7 +8,9 @@ import {
   Info,
 } from "lucide-react";
 import {
+  calculateEightStripGeneMixRequirements,
   calculateReactionRequirements,
+  type GeneMixPreparationMode,
   type ReactionSystemInput,
 } from "@/lib/reactionCalculator";
 import type {
@@ -42,6 +44,12 @@ interface NumericFieldProps {
   onCommit: (value: number) => void;
 }
 
+type NumericReactionSystemKey = {
+  [Key in keyof ReactionSystemInput]: ReactionSystemInput[Key] extends number
+    ? Key
+    : never;
+}[keyof ReactionSystemInput];
+
 const COPY = {
   zh: {
     ariaLabel: "反应体系与用量计算",
@@ -59,6 +67,18 @@ const COPY = {
       `上、下游引物体积分别填写；建议准备量已包含 ${overage}% 移液余量。`,
     primerStockNote:
       "当前假设上、下游引物液浓度相同。请填写实际移入反应孔的浓度；若先将 100 µM 原始储备液稀释为 10 µM 工作液，应填写 10 µM。",
+    geneMixMode: "384 孔基因反应混合液",
+    geneMixSingle: "单管准备",
+    geneMixEightStrip: "A–H 八连排分装",
+    geneMixEightStripMeta: "选择单管或按通道实际孔数分装",
+    eightStripDetails: (count: number) =>
+      `八连排 gene mix 分装（${count}）`,
+    plate: "孔板",
+    transferCycles: "排枪加液次数",
+    mixTotal: "混合液合计",
+    channelVolume: (channel: string) => `${channel} 管 · µL`,
+    eightStripFootnote:
+      "A–H 每管均为同一基因的反应混合液（预混液 + 上/下游引物 + 基础用水，不含 cDNA）；体积已含配液余量。A–H 通道先对应 A/C/E/G/I/K/M/O，再对应 B/D/F/H/J/L/N/P。Blank 的 cDNA 替代水需另行加入，不应混入共用 gene mix。",
     blankNote: "Blank 孔不加入 cDNA，以等体积 RNase-free ddH₂O 补足。",
     perWellTitle: "每孔反应体系",
     component: "组分",
@@ -122,6 +142,18 @@ const COPY = {
       `Forward and reverse primer volumes are entered separately. Preparation amounts include ${overage}% pipetting overage.`,
     primerStockNote:
       "The forward and reverse primer solutions are assumed to have the same concentration. Enter the concentration actually pipetted into the reaction; if a 100 µM master stock is first diluted to 10 µM, enter 10 µM.",
+    geneMixMode: "384-well assay-mix preparation",
+    geneMixSingle: "Single-tube preparation",
+    geneMixEightStrip: "A–H 8-tube strip aliquots",
+    geneMixEightStripMeta: "Choose one tube or aliquot by actual channel wells",
+    eightStripDetails: (count: number) =>
+      `8-channel gene-mix aliquots (${count})`,
+    plate: "Plate",
+    transferCycles: "Multichannel dispenses",
+    mixTotal: "Assay-mix total",
+    channelVolume: (channel: string) => `Tube ${channel} · µL`,
+    eightStripFootnote:
+      "Each A–H tube contains the same gene-specific assay mix (master mix + forward/reverse primers + base water, excluding cDNA), with pipetting overage included. Channels A–H first map to A/C/E/G/I/K/M/O, then to B/D/F/H/J/L/N/P. Add cDNA-replacement water for Blank wells separately; do not include it in the shared gene mix.",
     blankNote:
       "Blank wells receive no cDNA; the same volume is replaced with RNase-free water.",
     perWellTitle: "Per-well reaction",
@@ -319,13 +351,26 @@ export function ReactionCalculator({
     genes,
     blankNames,
   );
+  const isInterleaved384 =
+    layout.loadingPattern === "interleaved-8-channel" &&
+    layout.plates.some((plate) => plate.rows === 16);
+  const eightStripRequirements = calculateEightStripGeneMixRequirements(
+    layout.plates,
+    layout.loadingPattern,
+    value,
+    blankNames,
+  );
   const dynamicWarnings = calculation.warnings;
 
   function update(
-    key: keyof ReactionSystemInput,
+    key: NumericReactionSystemKey,
     nextValue: number,
   ) {
     onChange({ ...value, [key]: nextValue });
+  }
+
+  function updateGeneMixMode(nextMode: GeneMixPreparationMode) {
+    onChange({ ...value, geneMixPreparationMode: nextMode });
   }
 
   return (
@@ -425,6 +470,36 @@ export function ReactionCalculator({
           </div>
         </div>
       </div>
+
+      {isInterleaved384 && (
+        <div className="gene-mix-mode">
+          <div className="gene-mix-mode-heading">
+            <span>{copy.geneMixMode}</span>
+            <small>{copy.geneMixEightStripMeta}</small>
+          </div>
+          <div className="gene-mix-mode-options" role="radiogroup">
+            {(
+              [
+                ["single-tube", copy.geneMixSingle],
+                ["eight-strip", copy.geneMixEightStrip],
+              ] as const
+            ).map(([mode, label]) => (
+              <button
+                className={
+                  value.geneMixPreparationMode === mode ? "selected" : ""
+                }
+                key={mode}
+                type="button"
+                role="radio"
+                aria-checked={value.geneMixPreparationMode === mode}
+                onClick={() => updateGeneMixMode(mode)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="reaction-note">
         <Info size={14} aria-hidden="true" />
@@ -596,6 +671,69 @@ export function ReactionCalculator({
               {copy.assayFootnote}
             </p>
           </details>
+
+          {eightStripRequirements.length > 0 && (
+            <details className="reaction-details" open>
+              <summary>
+                {copy.eightStripDetails(eightStripRequirements.length)}
+              </summary>
+              <div className="reaction-table-wrap">
+                <table className="reaction-table requirement-table eight-strip-table">
+                  <thead>
+                    <tr>
+                      <th>{copy.plate}</th>
+                      <th>{copy.gene}</th>
+                      <th>{copy.transferCycles}</th>
+                      {Array.from({ length: 8 }, (_, index) =>
+                        String.fromCharCode(65 + index),
+                      ).map((channel) => (
+                        <th key={channel}>{copy.channelVolume(channel)}</th>
+                      ))}
+                      <th>{copy.mixTotal}</th>
+                      <th>{copy.replacementWater}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {eightStripRequirements.map((requirement) => (
+                      <tr
+                        key={`${requirement.plateNumber}-${requirement.gene}`}
+                      >
+                        <td>{requirement.plateName}</td>
+                        <td>
+                          {requirement.gene}
+                          {requirement.geneType === "reference" && (
+                            <span className="reaction-reference-tag">
+                              {copy.reference}
+                            </span>
+                          )}
+                        </td>
+                        <td>{requirement.transferCycles}</td>
+                        {requirement.channels.map((channel) => (
+                          <td
+                            key={channel.channel}
+                            title={`${channel.destinationRows} · P1 ${channel.pass1WellCount} + P2 ${channel.pass2WellCount}`}
+                          >
+                            {channel.wellCount > 0
+                              ? formatVolume(channel.assayMixUl)
+                              : "—"}
+                          </td>
+                        ))}
+                        <td>{formatVolume(requirement.totalAssayMixUl)}</td>
+                        <td>
+                          {formatVolume(
+                            requirement.blankReplacementWaterUl,
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p className="reaction-table-footnote">
+                {copy.eightStripFootnote}
+              </p>
+            </details>
+          )}
 
           <details className="reaction-details">
             <summary>

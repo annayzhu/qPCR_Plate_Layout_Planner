@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  calculateEightStripGeneMixRequirements,
   primerFinalConcentrationNm,
   type ReactionSystemInput,
 } from "./reactionCalculator";
@@ -66,6 +67,7 @@ export const PLATE_WORKBOOK_SHEET_ORDER = [
   "Plate_Map",
   "Well_Detail",
   "Gene_Requirements",
+  "Gene_8Channel_Setup",
   "Sample_cDNA",
   "Total_Requirements",
   "Design_Summary",
@@ -531,9 +533,70 @@ function appendReactionSheets(
     { wch: 31 },
   ];
 
+  const eightStripRequirements = calculateEightStripGeneMixRequirements(
+    plates,
+    context.loadingPattern ?? "sequential",
+    context.reactionSystem,
+    context.blankSamples,
+  );
+  const eightStripRows = eightStripRequirements.flatMap((requirement) =>
+    requirement.channels.map((channel) => ({
+      "范围 / Scope": scope,
+      "孔板名称 / Plate name": requirement.plateName,
+      "孔板编号 / Plate number": requirement.plateNumber,
+      "基因 / Assay": requirement.gene,
+      "类型 / Type":
+        requirement.geneType === "reference"
+          ? "内参 / Reference"
+          : "目的 / Target",
+      "八连排源通道 / Source channel": channel.channel,
+      "目标板行 / Destination rows": channel.destinationRows,
+      "第1次上样孔 / Pass 1 wells": channel.pass1WellCount,
+      "第2次上样孔 / Pass 2 wells": channel.pass2WellCount,
+      "总孔数 / Total wells": channel.wellCount,
+      "Blank 孔 / Blank wells": channel.blankWellCount,
+      "本管基因混合液 / Assay mix in tube (µL)":
+        roundedVolume(channel.assayMixUl),
+      "Blank 替代水（另加）/ Blank replacement water, separate (µL)":
+        roundedVolume(channel.blankReplacementWaterUl),
+      "本基因排枪加液次数 / Multichannel dispenses for assay":
+        requirement.transferCycles,
+      "本基因混合液合计 / Assay-mix total (µL)":
+        roundedVolume(requirement.totalAssayMixUl),
+    })),
+  );
+  const eightStripSheet =
+    eightStripRows.length > 0
+      ? XLSX.utils.json_to_sheet(eightStripRows)
+      : XLSX.utils.aoa_to_sheet([
+          ["状态 / Status", "本方案未启用 384 孔 A–H 八连排 gene mix 分装。 / 384-well A–H 8-tube-strip assay-mix preparation is not enabled for this design."],
+        ]);
+  eightStripSheet["!cols"] = [
+    { wch: 24 },
+    { wch: 24 },
+    { wch: 14 },
+    { wch: 22 },
+    { wch: 16 },
+    { wch: 20 },
+    { wch: 22 },
+    { wch: 18 },
+    { wch: 18 },
+    { wch: 16 },
+    { wch: 16 },
+    { wch: 28 },
+    { wch: 34 },
+    { wch: 28 },
+    { wch: 28 },
+  ];
+
   XLSX.utils.book_append_sheet(workbook, reactionSheet, "Reaction_Setup");
   XLSX.utils.book_append_sheet(workbook, totalSheet, "Total_Requirements");
   XLSX.utils.book_append_sheet(workbook, geneSheet, "Gene_Requirements");
+  XLSX.utils.book_append_sheet(
+    workbook,
+    eightStripSheet,
+    "Gene_8Channel_Setup",
+  );
   XLSX.utils.book_append_sheet(workbook, sampleSheet, "Sample_cDNA");
 }
 
@@ -809,6 +872,15 @@ export async function buildPlateWorkbook(
       context.loadingPattern === "interleaved-8-channel"
         ? "第 1 次 A/C/E/G/I/K/M/O；第 2 次 B/D/F/H/J/L/N/P / Pass 1 A/C/E/G/I/K/M/O; Pass 2 B/D/F/H/J/L/N/P"
         : `${context.plateType === 384 ? "A–P" : "A–H"} 连续物理行序 / Sequential physical row order`,
+    ],
+    [
+      "基因反应混合液准备 / Assay-mix preparation",
+      context.plateType === 384 &&
+      context.loadingPattern === "interleaved-8-channel"
+        ? context.reactionSystem.geneMixPreparationMode === "eight-strip"
+          ? "A–H 八连排分装 / A–H 8-tube-strip aliquots"
+          : "单管准备 / Single-tube preparation"
+        : "不适用 / Not applicable",
     ],
     ["技术复孔 / Technical replicates", context.replicates],
     ["实验总样本数 / Total samples", context.samples.length],
