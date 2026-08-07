@@ -59,15 +59,31 @@ test("plate workbook exports bilingual reaction totals and scoped requirement sh
   assert.equal(workbook.Sheets.Total_Requirements.A4.v, "反应预混液 / Master mix");
   assert.equal(workbook.Sheets.Total_Requirements.B4.v, 480);
   assert.equal(workbook.Sheets.Total_Requirements.C4.v, 528);
-  assert.equal(workbook.Sheets.Gene_Requirements.A1.v, "范围 / Scope");
+  const geneRequirementRows = XLSX.utils.sheet_to_json<
+    Array<string | number>
+  >(workbook.Sheets.Gene_Requirements, { header: 1 });
+  assert.deepEqual(geneRequirementRows[0], [
+    "范围 / Scope",
+    "基因 / Assay",
+    "类型 / Type",
+    "孔数 / Well count",
+    "上游引物 / Forward primer (µL)",
+    "下游引物 / Reverse primer (µL)",
+    "预混液 / Master mix (µL)",
+    "用水 / Water (µL)",
+    "配液不含cDNA / Mix excluding cDNA (µL)",
+    "完整反应体积 / Reaction total (µL)",
+    "上游引物终浓度 / Forward primer final (nM)",
+    "下游引物终浓度 / Reverse primer final (nM)",
+  ]);
   assert.equal(workbook.Sheets.Gene_8Channel_Setup.A1.v, "状态 / Status");
   assert.equal(workbook.Sheets.Sample_cDNA.A1.v, "范围 / Scope");
   assert.equal(
-    workbook.Sheets.Gene_Requirements.H1.v,
+    workbook.Sheets.Gene_Requirements.K1.v,
     "上游引物终浓度 / Forward primer final (nM)",
   );
-  assert.equal(workbook.Sheets.Gene_Requirements.H2.v, 300);
-  assert.equal(workbook.Sheets.Gene_Requirements.I2.v, 500);
+  assert.equal(workbook.Sheets.Gene_Requirements.K2.v, 300);
+  assert.equal(workbook.Sheets.Gene_Requirements.L2.v, 500);
   assert.equal(workbook.Sheets.Well_Detail.A1.v, "孔板名称 / Plate name");
   assert.equal(workbook.Sheets.Well_Detail.B1.v, "孔板编号 / Plate number");
   assert.match(workbook.Sheets.Plate_Map.A1.v, /Main run \/ 主实验 \(Plate 01\)/);

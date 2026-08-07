@@ -455,13 +455,6 @@ function appendReactionSheets(
         "下游引物 / Reverse primer (µL)": roundedVolume(
           prepareReactions * reversePerWell,
         ),
-        "引物总体积（仅汇总，分别准备）/ Primer total (summary only; prepare separately) (µL)": roundedVolume(
-          prepareReactions * primerPairPerWell,
-        ),
-        "上游引物终浓度 / Forward primer final (nM)":
-          roundedVolume(forwardFinalNm),
-        "下游引物终浓度 / Reverse primer final (nM)":
-          roundedVolume(reverseFinalNm),
         "预混液 / Master mix (µL)": roundedVolume(
           prepareReactions *
             context.reactionSystem.masterMixPerWellUl,
@@ -482,6 +475,10 @@ function appendReactionSheets(
         "完整反应体积 / Reaction total (µL)": roundedVolume(
           prepareReactions * context.reactionSystem.totalPerWellUl,
         ),
+        "上游引物终浓度 / Forward primer final (nM)":
+          roundedVolume(forwardFinalNm),
+        "下游引物终浓度 / Reverse primer final (nM)":
+          roundedVolume(reverseFinalNm),
       };
     },
   );
@@ -491,7 +488,7 @@ function appendReactionSheets(
     { wch: 22 },
     { wch: 14 },
     { wch: 12 },
-    ...Array.from({ length: 9 }, () => ({ wch: 22 })),
+    ...Array.from({ length: 8 }, () => ({ wch: 22 })),
   ];
 
   const sampleRows = Array.from(sampleCounts.entries()).map(
