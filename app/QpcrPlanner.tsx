@@ -1936,14 +1936,13 @@ export function QpcrPlanner() {
                     className="button button-soft quick-fill-button"
                     type="submit"
                     disabled={parsedSampleQuickCount === null}
+                    aria-label={tr(
+                      "快速添加编号样本",
+                      "Quickly add numbered samples",
+                    )}
                   >
                     <Sparkles size={15} />
-                    {parsedSampleQuickCount === null
-                      ? tr("生成 S1…Sn", "Generate S1…Sn")
-                      : tr(
-                          `生成 S1–S${parsedSampleQuickCount}`,
-                          `Generate S1–S${parsedSampleQuickCount}`,
-                        )}
+                    {tr("快速添加", "Quick add")}
                   </button>
                 </form>
               </div>
@@ -2197,14 +2196,13 @@ export function QpcrPlanner() {
                     className="button button-soft quick-fill-button"
                     type="submit"
                     disabled={parsedGeneQuickCount === null}
+                    aria-label={tr(
+                      "快速添加编号检测基因",
+                      "Quickly add numbered assays",
+                    )}
                   >
                     <Sparkles size={15} />
-                    {parsedGeneQuickCount === null
-                      ? tr("生成 T1…Tn", "Generate T1…Tn")
-                      : tr(
-                          `生成 T1–T${parsedGeneQuickCount}`,
-                          `Generate T1–T${parsedGeneQuickCount}`,
-                        )}
+                    {tr("快速添加", "Quick add")}
                   </button>
                 </form>
               </div>
