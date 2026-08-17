@@ -401,7 +401,7 @@ export function QpcrPlanner() {
   const [language, setLanguage] = useState<Language>("zh");
   const [replicates, setReplicates] = useState(3);
   const [layoutPreset, setLayoutPreset] =
-    useState<LayoutPreset>("sample-major");
+    useState<LayoutPreset>("gene-major");
   const [loadingPattern, setLoadingPattern] =
     useState<LoadingPattern>("sequential");
   const [fillDirection, setFillDirection] =
@@ -1144,7 +1144,7 @@ export function QpcrPlanner() {
     setGeneInputRole("target");
     setGeneDraftOpen(false);
     setReplicates(3);
-    setLayoutPreset("sample-major");
+    setLayoutPreset("gene-major");
     setLoadingPattern("sequential");
     setFillDirection("vertical");
     setLayout(null);
@@ -1356,7 +1356,7 @@ export function QpcrPlanner() {
     setSamples([]);
     setGenes([]);
     setReplicates(3);
-    setLayoutPreset("sample-major");
+    setLayoutPreset("gene-major");
     setLoadingPattern("sequential");
     setFillDirection("vertical");
     setSampleInput("");
