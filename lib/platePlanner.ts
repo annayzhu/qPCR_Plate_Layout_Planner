@@ -4,10 +4,12 @@ export type LayoutSource = "auto" | "manual";
 export type LayoutStrategy = "sample-major" | "gene-major" | "hybrid";
 export type LayoutPreset = Exclude<LayoutStrategy, "hybrid">;
 export type LoadingPattern = "sequential" | "interleaved-8-channel";
+export type LayoutFillDirection = "vertical" | "horizontal";
 
 export interface PlanOptions {
   strategy?: LayoutPreset;
   loadingPattern?: LoadingPattern;
+  fillDirection?: LayoutFillDirection;
 }
 
 export interface PlanInput {
@@ -60,6 +62,7 @@ export interface PlanResult {
   plates: PlannerPlate[];
   strategy: LayoutStrategy;
   loadingPattern: LoadingPattern;
+  fillDirection: LayoutFillDirection;
   metrics: PlanMetrics;
   reason: string;
 }
@@ -1203,16 +1206,19 @@ function materializePlate(
   inputSamples: string[],
   strategy: LayoutStrategy,
   loadingPattern: LoadingPattern,
+  fillDirection: LayoutFillDirection,
 ): PlannerPlate {
   const wells = emptyWells(rows, columns);
   const wellIndex = new Map(wells.map((well, index) => [well.wellId, index]));
   const rowOrder = loadingRowOrder(rows, loadingPattern);
+  const blocksPerRow = Math.floor(columns / replicates);
   const sampleIndices = new Map(
     inputSamples.map((sample, index) => [sample, index]),
   );
   const alignEachGene =
     strategy === "gene-major" &&
-    loadingPattern === "interleaved-8-channel";
+    loadingPattern === "interleaved-8-channel" &&
+    fillDirection === "vertical";
   const alignedGeneBandColumns = new Map<string, Map<number, number>>();
   if (alignEachGene) {
     const geneBands = new Map<string, Set<number>>();
@@ -1258,8 +1264,13 @@ function materializePlate(
       rowPosition = globalIndex % rows;
       blockColumn = alignedColumn;
     } else {
-      rowPosition = blockIndex % rows;
-      blockColumn = Math.floor(blockIndex / rows);
+      if (fillDirection === "horizontal") {
+        rowPosition = Math.floor(blockIndex / blocksPerRow);
+        blockColumn = blockIndex % blocksPerRow;
+      } else {
+        rowPosition = blockIndex % rows;
+        blockColumn = Math.floor(blockIndex / rows);
+      }
     }
     const row = rowOrder[rowPosition];
     const startColumn = blockColumn * replicates;
@@ -1310,6 +1321,7 @@ export function planPlateLayout(
     input.plateType,
     options.loadingPattern,
   );
+  const fillDirection = options.fillDirection ?? "vertical";
   const strategies: LayoutStrategy[] = options.strategy
     ? [options.strategy]
     : loadingPattern === "interleaved-8-channel"
@@ -1320,7 +1332,8 @@ export function planPlateLayout(
   );
   const usesInterleavedGeneBands =
     input.plateType === 384 &&
-    loadingPattern === "interleaved-8-channel";
+    loadingPattern === "interleaved-8-channel" &&
+    fillDirection === "vertical";
   const standardPackings = strategies.some(
     (strategy) => strategy !== "gene-major" || !usesInterleavedGeneBands,
   )
@@ -1393,6 +1406,7 @@ export function planPlateLayout(
       input.samples,
       best.strategy,
       loadingPattern,
+      fillDirection,
     ),
   );
   const usedBlocks =
@@ -1421,6 +1435,7 @@ export function planPlateLayout(
     plates,
     strategy: best.strategy,
     loadingPattern,
+    fillDirection,
     metrics: {
       plateCount: plates.length,
       usedWells,

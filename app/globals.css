@@ -840,13 +840,20 @@ select:focus-visible,
   gap: 10px;
 }
 
-.layout-preset-direction {
-  padding: 3px 7px;
+.layout-direction-toggle {
+  width: min(166px, 56%);
+  min-width: 136px;
+  padding: 2px;
   border-radius: 999px;
   background: var(--action-soft);
+}
+
+.layout-direction-toggle button {
+  min-height: 24px;
+  border-radius: 999px;
   color: var(--action);
   font-size: 9px;
-  font-weight: 700;
+  font-weight: 750;
 }
 
 .layout-preset-toggle {

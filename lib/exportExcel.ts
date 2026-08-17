@@ -6,6 +6,7 @@ import {
   type ReactionSystemInput,
 } from "./reactionCalculator";
 import type {
+  LayoutFillDirection,
   LayoutStrategy,
   LoadingPattern,
 } from "./platePlanner";
@@ -38,6 +39,7 @@ export interface ExportContext {
   plateType: 96 | 384;
   /** Physical loading route used to place samples into the destination plate. */
   loadingPattern?: LoadingPattern;
+  fillDirection?: LayoutFillDirection;
   layoutStrategy?: LayoutStrategy;
   replicates: number;
   samples: string[];
@@ -172,6 +174,7 @@ function hasFixedSourcePlateMapping(context: ExportContext) {
   return (
     context.plateType === 384 &&
     context.loadingPattern === "interleaved-8-channel" &&
+    (context.fillDirection ?? "vertical") === "vertical" &&
     (context.layoutStrategy === "gene-major" ||
       (context.layoutStrategy === undefined &&
         /按基因|By assay/iu.test(context.strategyLabel)))
@@ -186,7 +189,9 @@ function sourcePlateMappingLabel(context: ExportContext) {
     return "不适用 / Not applicable";
   }
   if (!hasFixedSourcePlateMapping(context)) {
-    return "按样本排列不生成可直接执行的固定 A–H 来源板映射，请人工规划。 / Sample-major layout does not provide a direct fixed A–H source-plate map; plan it manually.";
+    return (context.fillDirection ?? "vertical") === "horizontal"
+      ? "横向优先不生成可直接执行的固定 A–H 来源板映射，请人工规划。 / Horizontal-first layout does not provide a direct fixed A–H source-plate map; plan it manually."
+      : "按样本排列不生成可直接执行的固定 A–H 来源板映射，请人工规划。 / Sample-major layout does not provide a direct fixed A–H source-plate map; plan it manually.";
   }
   return "样本按输入顺序每 8 个组成一个来源八道组；同一样本在所有基因中保持同一 A–H 来源行。手动修改孔需复核。 / Every 8 input-order samples form one source group; each sample keeps the same A–H source row across assays. Review manual wells.";
 }
@@ -863,6 +868,12 @@ export async function buildPlateWorkbook(
       )} nM`,
     ],
     ["上样方式 / Loading pattern", loadingPatternLabel(context)],
+    [
+      "填充方向 / Fill direction",
+      (context.fillDirection ?? "vertical") === "horizontal"
+        ? "横向优先 / Horizontal first"
+        : "纵向优先 / Vertical first",
+    ],
     [
       "上样行序 / Loading row order",
       context.plateType === 384 &&

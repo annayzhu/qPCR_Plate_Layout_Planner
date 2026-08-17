@@ -43,6 +43,8 @@ test("server-renders the qPCR plate planner shell", async () => {
   assert.match(html, /技术复孔/);
   assert.match(html, /按样本排列/);
   assert.match(html, /按基因排列/);
+  assert.match(html, /纵向优先/);
+  assert.match(html, /横向优先/);
   assert.match(html, /生成布局/);
   assert.match(html, /重置工具/);
   assert.match(html, /导入 0 个样本名称/);

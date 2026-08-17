@@ -149,6 +149,13 @@ test("plate workbook exports bilingual reaction totals and scoped requirement sh
         row[1] === "连续孔位 / Sequential wells",
     ),
   );
+  assert.ok(
+    summaryRows.some(
+      (row) =>
+        row[0] === "填充方向 / Fill direction" &&
+        row[1] === "纵向优先 / Vertical first",
+    ),
+  );
 
   const detailRows = XLSX.utils.sheet_to_json<Record<string, string | number>>(
     workbook.Sheets.Well_Detail,
@@ -313,6 +320,13 @@ test("384-well interleaved export follows physical A-P rows and records both 8-c
         String(row[1]).includes("A/C/E/G/I/K/M/O"),
     ),
   );
+  assert.ok(
+    summaryRows.some(
+      (row) =>
+        row[0] === "填充方向 / Fill direction" &&
+        row[1] === "纵向优先 / Vertical first",
+    ),
+  );
 
   const sampleMajorExport = await buildPlateWorkbook(plate, {
     ...context,
@@ -329,6 +343,21 @@ test("384-well interleaved export follows physical A-P rows and records both 8-c
   assert.equal(
     sampleMajorA1?.["来源行 / Source row (A-H)"],
     "手动复核 / Review manual",
+  );
+
+  const horizontalExport = await buildPlateWorkbook(plate, {
+    ...context,
+    fillDirection: "horizontal",
+  });
+  const horizontalSummaryRows = XLSX.utils.sheet_to_json<
+    Array<string | number>
+  >(horizontalExport.workbook.Sheets.Design_Summary, { header: 1 });
+  assert.ok(
+    horizontalSummaryRows.some(
+      (row) =>
+        row[0] === "填充方向 / Fill direction" &&
+        row[1] === "横向优先 / Horizontal first",
+    ),
   );
 });
 

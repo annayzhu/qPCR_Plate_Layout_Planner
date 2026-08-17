@@ -96,6 +96,41 @@ test("places sample-major replicate blocks top-to-bottom before moving right", (
   assert.equal(refreshed.metrics.primerSwitches, 5);
 });
 
+test("supports horizontal-first filling while keeping replicate blocks contiguous", () => {
+  const input = {
+    plateType: 96 as const,
+    samples: ["S1", "S2"],
+    targetGenes: ["G1", "G2"],
+    referenceGenes: ["R1"],
+    replicates: 3,
+  };
+  const result = planPlateLayout(input, {
+    strategy: "sample-major",
+    fillDirection: "horizontal",
+  });
+  const plate = result.plates[0];
+  const occupiedBlocks = plate.wells
+    .filter((well) => well.replicateIndex === 1)
+    .sort(
+      (left, right) =>
+        left.row - right.row ||
+        Math.floor(left.column / input.replicates) -
+          Math.floor(right.column / input.replicates),
+    )
+    .map((well) => `${well.wellId}:${well.sample}/${well.gene}`);
+
+  assert.equal(result.fillDirection, "horizontal");
+  assert.deepEqual(occupiedBlocks, [
+    "A1:S1/R1",
+    "A4:S1/G1",
+    "A7:S1/G2",
+    "A10:S2/R1",
+    "B1:S2/G1",
+    "B4:S2/G2",
+  ]);
+  assert.equal(validateLayout(result, input).valid, true);
+});
+
 test("places gene-major blocks by assay while preserving sample order", () => {
   const input = {
     plateType: 96 as const,
@@ -199,6 +234,45 @@ test("384-well planning defaults to the interleaved assay-major workflow", () =>
     )?.wellId,
     "C1",
   );
+});
+
+test("384-well interleaved horizontal-first fills across block columns first", () => {
+  const input = {
+    plateType: 384 as const,
+    samples: ["S1", "S2", "S3", "S4"],
+    targetGenes: ["G1"],
+    referenceGenes: ["R1"],
+    replicates: 3,
+  };
+  const result = planPlateLayout(input, {
+    strategy: "gene-major",
+    loadingPattern: "interleaved-8-channel",
+    fillDirection: "horizontal",
+  });
+  const plate = result.plates[0];
+  const occupiedBlocks = plate.wells
+    .filter((well) => well.replicateIndex === 1)
+    .sort(
+      (left, right) =>
+        left.row - right.row ||
+        Math.floor(left.column / input.replicates) -
+          Math.floor(right.column / input.replicates),
+    )
+    .map((well) => `${well.wellId}:${well.sample}/${well.gene}`);
+
+  assert.equal(result.loadingPattern, "interleaved-8-channel");
+  assert.equal(result.fillDirection, "horizontal");
+  assert.deepEqual(occupiedBlocks, [
+    "A1:S1/R1",
+    "A4:S2/R1",
+    "A7:S3/R1",
+    "A10:S4/R1",
+    "A13:S1/G1",
+    "A16:S2/G1",
+    "A19:S3/G1",
+    "A22:S4/G1",
+  ]);
+  assert.equal(validateLayout(result, input).valid, true);
 });
 
 test("384-well interleaved gene layout follows both 8-channel passes and starts each assay in a new column block", () => {
