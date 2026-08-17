@@ -46,6 +46,11 @@ import {
   type ReactionSystemInput,
 } from "@/lib/reactionCalculator";
 import {
+  generateNumberedEntries,
+  MAX_QUICK_ENTRY_COUNT,
+  parseQuickEntryCount,
+} from "@/lib/quickEntries";
+import {
   assignSelectedWells,
   rectangularWellIds,
   translateSelectedWells,
@@ -394,6 +399,8 @@ export function QpcrPlanner() {
   const [geneDraftOpen, setGeneDraftOpen] = useState(false);
   const [samplePaste, setSamplePaste] = useState("");
   const [genePaste, setGenePaste] = useState("");
+  const [sampleQuickCount, setSampleQuickCount] = useState("");
+  const [geneQuickCount, setGeneQuickCount] = useState("");
   const [layout, setLayout] = useState<PlanResult | null>(null);
   const [automaticLayout, setAutomaticLayout] = useState<PlanResult | null>(
     null,
@@ -444,6 +451,14 @@ export function QpcrPlanner() {
   const genePasteNames = useMemo(
     () => parseExcelNames(genePaste),
     [genePaste],
+  );
+  const parsedSampleQuickCount = useMemo(
+    () => parseQuickEntryCount(sampleQuickCount),
+    [sampleQuickCount],
+  );
+  const parsedGeneQuickCount = useMemo(
+    () => parseQuickEntryCount(geneQuickCount),
+    [geneQuickCount],
   );
   const blankSampleNames = useMemo(
     () =>
@@ -955,6 +970,20 @@ export function QpcrPlanner() {
     }
   }
 
+  function submitQuickSamples(event: FormEvent) {
+    event.preventDefault();
+    if (parsedSampleQuickCount === null) return;
+    addSamples(generateNumberedEntries("S", parsedSampleQuickCount));
+    setSampleQuickCount("");
+  }
+
+  function submitQuickGenes(event: FormEvent) {
+    event.preventDefault();
+    if (parsedGeneQuickCount === null) return;
+    addGenes(generateNumberedEntries("T", parsedGeneQuickCount));
+    setGeneQuickCount("");
+  }
+
   function loadExample() {
     const exampleSamples: SampleEntry[] = Array.from(
       { length: 8 },
@@ -1199,6 +1228,8 @@ export function QpcrPlanner() {
     setGeneDraftOpen(false);
     setSamplePaste("");
     setGenePaste("");
+    setSampleQuickCount("");
+    setGeneQuickCount("");
     setLayout(null);
     setAutomaticLayout(null);
     setLayoutSignature("");
@@ -1851,6 +1882,7 @@ export function QpcrPlanner() {
                     setSampleInput("");
                     setSampleInputKind("sample");
                     setSampleDraftOpen(false);
+                    setSampleQuickCount("");
                     markChanged();
                   }}
                 >
@@ -1887,6 +1919,33 @@ export function QpcrPlanner() {
                     }`,
                   )}
                 </button>
+                <form className="quick-fill-row" onSubmit={submitQuickSamples}>
+                  <input
+                    className="quick-fill-input"
+                    type="number"
+                    min={1}
+                    max={MAX_QUICK_ENTRY_COUNT}
+                    step={1}
+                    inputMode="numeric"
+                    value={sampleQuickCount}
+                    onChange={(event) => setSampleQuickCount(event.target.value)}
+                    placeholder={tr("样本数量（1–999）", "Sample count (1–999)")}
+                    aria-label={tr("快速输入样本数量", "Quick sample count")}
+                  />
+                  <button
+                    className="button button-soft quick-fill-button"
+                    type="submit"
+                    disabled={parsedSampleQuickCount === null}
+                  >
+                    <Sparkles size={15} />
+                    {parsedSampleQuickCount === null
+                      ? tr("生成 S1…Sn", "Generate S1…Sn")
+                      : tr(
+                          `生成 S1–S${parsedSampleQuickCount}`,
+                          `Generate S1–S${parsedSampleQuickCount}`,
+                        )}
+                  </button>
+                </form>
               </div>
               {samples.length > 0 && (
                 <div
@@ -2084,6 +2143,7 @@ export function QpcrPlanner() {
                     setGeneInput("");
                     setGeneInputRole("target");
                     setGeneDraftOpen(false);
+                    setGeneQuickCount("");
                     markChanged();
                   }}
                 >
@@ -2120,6 +2180,33 @@ export function QpcrPlanner() {
                     }`,
                   )}
                 </button>
+                <form className="quick-fill-row" onSubmit={submitQuickGenes}>
+                  <input
+                    className="quick-fill-input"
+                    type="number"
+                    min={1}
+                    max={MAX_QUICK_ENTRY_COUNT}
+                    step={1}
+                    inputMode="numeric"
+                    value={geneQuickCount}
+                    onChange={(event) => setGeneQuickCount(event.target.value)}
+                    placeholder={tr("基因数量（1–999）", "Assay count (1–999)")}
+                    aria-label={tr("快速输入基因数量", "Quick assay count")}
+                  />
+                  <button
+                    className="button button-soft quick-fill-button"
+                    type="submit"
+                    disabled={parsedGeneQuickCount === null}
+                  >
+                    <Sparkles size={15} />
+                    {parsedGeneQuickCount === null
+                      ? tr("生成 T1…Tn", "Generate T1…Tn")
+                      : tr(
+                          `生成 T1–T${parsedGeneQuickCount}`,
+                          `Generate T1–T${parsedGeneQuickCount}`,
+                        )}
+                  </button>
+                </form>
               </div>
               {genes.length > 0 && (
                 <div

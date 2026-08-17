@@ -602,6 +602,44 @@ select:focus-visible,
   justify-content: center;
 }
 
+.quick-fill-row {
+  display: grid;
+  align-items: center;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.quick-fill-input {
+  width: 100%;
+  min-width: 0;
+  min-height: 40px;
+  padding: 8px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 12px;
+  transition:
+    border-color 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.quick-fill-input:hover {
+  border-color: var(--border-strong);
+}
+
+.quick-fill-input:focus {
+  border-color: var(--focus);
+  box-shadow: 0 0 0 3px rgba(23, 107, 117, 0.1);
+  outline: 0;
+}
+
+.quick-fill-button {
+  min-width: 142px;
+  min-height: 40px;
+  white-space: nowrap;
+}
+
 .sample-name-input {
   width: 100%;
   min-width: 0;
@@ -2425,6 +2463,11 @@ select:focus-visible,
   .sample-draft-actions {
     grid-column: 1 / -1;
     justify-content: flex-end;
+  }
+
+  .quick-fill-button {
+    min-width: 124px;
+    padding-inline: 10px;
   }
 
   .hero-title {
