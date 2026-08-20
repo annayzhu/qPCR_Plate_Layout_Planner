@@ -11,6 +11,8 @@ export interface ManualAssignment {
   geneType: GeneType | null;
 }
 
+export type BoxSelectionMode = "replace" | "toggle";
+
 export type TranslateSelectionResult =
   | {
       ok: true;
@@ -57,6 +59,21 @@ export function rectangularWellIds(
     )
     .sort((left, right) => left.row - right.row || left.column - right.column)
     .map((well) => well.wellId);
+}
+
+export function applyBoxSelection(
+  currentWellIds: readonly string[],
+  boxedWellIds: readonly string[],
+  mode: BoxSelectionMode,
+) {
+  if (mode === "replace") return Array.from(new Set(boxedWellIds));
+
+  const next = new Set(currentWellIds);
+  for (const wellId of new Set(boxedWellIds)) {
+    if (next.has(wellId)) next.delete(wellId);
+    else next.add(wellId);
+  }
+  return Array.from(next);
 }
 
 export function assignSelectedWells(

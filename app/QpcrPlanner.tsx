@@ -31,10 +31,12 @@ import {
   Fragment,
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import {
@@ -66,9 +68,11 @@ import {
   parseQuickEntryCount,
 } from "@/lib/quickEntries";
 import {
+  applyBoxSelection,
   assignSelectedWells,
   rectangularWellIds,
   translateSelectedWells,
+  type BoxSelectionMode,
 } from "@/lib/manualLayout";
 import {
   defaultPlateName,
@@ -124,6 +128,19 @@ type EntryKind = "sample" | "gene";
 interface DraggedEntry {
   kind: EntryKind;
   id: string;
+}
+
+interface BoxSelectionState {
+  pointerId: number;
+  anchorWellId: string;
+  endWellId: string;
+  baseWellIds: string[];
+  mode: BoxSelectionMode;
+  startX: number;
+  startY: number;
+  currentX: number;
+  currentY: number;
+  active: boolean;
 }
 
 interface SortableEntryRowProps {
@@ -565,6 +582,10 @@ export function QpcrPlanner() {
   const [selectionAnchorId, setSelectionAnchorId] = useState<string | null>(
     null,
   );
+  const [boxSelection, setBoxSelection] =
+    useState<BoxSelectionState | null>(null);
+  const boxSelectionRef = useRef<BoxSelectionState | null>(null);
+  const suppressWellClickRef = useRef(false);
   const [moveMode, setMoveMode] = useState(false);
   const [editingPlateName, setEditingPlateName] = useState(false);
   const [plateNameDraft, setPlateNameDraft] = useState("");
@@ -1694,6 +1715,7 @@ export function QpcrPlanner() {
     plate: PlannerPlate,
     well: PlannerWell,
   ) {
+    if (suppressWellClickRef.current) return;
     if (confirmed[String(plate.plateNumber)] || settingsStale) return;
     if (moveMode) {
       moveSelectionTo(plateIndex, plate, well.wellId);
@@ -1722,6 +1744,120 @@ export function QpcrPlanner() {
     }
     setSelectedWellIds([well.wellId]);
     setSelectionAnchorId(well.wellId);
+  }
+
+  function boxPointerPosition(event: ReactPointerEvent<HTMLDivElement>) {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    return {
+      x: Math.max(0, Math.min(bounds.width, event.clientX - bounds.left)),
+      y: Math.max(0, Math.min(bounds.height, event.clientY - bounds.top)),
+    };
+  }
+
+  function wellIdAtPointer(event: ReactPointerEvent<HTMLDivElement>) {
+    const element = document.elementFromPoint(event.clientX, event.clientY);
+    return element
+      ?.closest<HTMLButtonElement>("button[data-well-id]")
+      ?.dataset.wellId;
+  }
+
+  function beginBoxSelection(
+    event: ReactPointerEvent<HTMLDivElement>,
+    plate: PlannerPlate,
+  ) {
+    if (
+      event.button !== 0 ||
+      moveMode ||
+      confirmed[String(plate.plateNumber)] ||
+      settingsStale
+    ) {
+      return;
+    }
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    const anchorWellId = target
+      .closest<HTMLButtonElement>("button[data-well-id]")
+      ?.dataset.wellId;
+    if (!anchorWellId) return;
+
+    const position = boxPointerPosition(event);
+    const next: BoxSelectionState = {
+      pointerId: event.pointerId,
+      anchorWellId,
+      endWellId: anchorWellId,
+      baseWellIds: [...selectedWellIds],
+      mode: event.metaKey || event.ctrlKey ? "toggle" : "replace",
+      startX: position.x,
+      startY: position.y,
+      currentX: position.x,
+      currentY: position.y,
+      active: false,
+    };
+    boxSelectionRef.current = next;
+    setBoxSelection(next);
+  }
+
+  function updateBoxSelection(
+    event: ReactPointerEvent<HTMLDivElement>,
+    plate: PlannerPlate,
+  ) {
+    const current = boxSelectionRef.current;
+    if (!current || current.pointerId !== event.pointerId) return;
+
+    const position = boxPointerPosition(event);
+    const distance = Math.hypot(
+      position.x - current.startX,
+      position.y - current.startY,
+    );
+    const active = current.active || distance >= 6;
+    if (active && !current.active) {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    }
+    const endWellId = wellIdAtPointer(event) ?? current.endWellId;
+    const next = {
+      ...current,
+      endWellId,
+      currentX: position.x,
+      currentY: position.y,
+      active,
+    };
+    boxSelectionRef.current = next;
+    setBoxSelection(next);
+    if (!active) return;
+
+    event.preventDefault();
+    const boxedWellIds = rectangularWellIds(
+      plate,
+      next.anchorWellId,
+      next.endWellId,
+    );
+    setSelectedWellIds(
+      applyBoxSelection(next.baseWellIds, boxedWellIds, next.mode),
+    );
+    setSelectionAnchorId(next.endWellId);
+  }
+
+  function finishBoxSelection(event: ReactPointerEvent<HTMLDivElement>) {
+    const current = boxSelectionRef.current;
+    if (!current || current.pointerId !== event.pointerId) return;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    if (current.active) {
+      suppressWellClickRef.current = true;
+      window.setTimeout(() => {
+        suppressWellClickRef.current = false;
+      }, 0);
+    }
+    boxSelectionRef.current = null;
+    setBoxSelection(null);
+  }
+
+  function cancelBoxSelection(event: ReactPointerEvent<HTMLDivElement>) {
+    const current = boxSelectionRef.current;
+    if (!current || current.pointerId !== event.pointerId) return;
+    boxSelectionRef.current = null;
+    setBoxSelection(null);
   }
 
   function applyManualEdit() {
@@ -3631,8 +3767,8 @@ export function QpcrPlanner() {
                     </div>
                     <span className="plate-hint">
                       {tr(
-                        "单击选择 · Shift 连选 · Ctrl/⌘ 多选 · 双击编辑",
-                        "Click to select · Shift range · Ctrl/⌘ multi-select · Double-click to edit",
+                        "单击选择 · Shift 连选 · 拖动框选 · Ctrl/⌘ 增减 · 双击编辑",
+                        "Click · Shift range · Drag to box-select · Ctrl/⌘ toggle · Double-click to edit",
                       )}
                     </span>
                   </div>
@@ -3779,18 +3915,50 @@ export function QpcrPlanner() {
                     <div
                       className={`plate-grid ${
                         activePlate.rows === 16 ? "plate-384" : ""
-                      } ${moveMode ? "move-mode" : ""}`}
+                      } ${moveMode ? "move-mode" : ""} ${
+                        boxSelection?.active ? "is-box-selecting" : ""
+                      }`}
                       style={
                         {
                           "--plate-columns": activePlate.columns,
                         } as CSSProperties
                       }
                       role="grid"
+                      onPointerDown={(event) =>
+                        beginBoxSelection(event, activePlate)
+                      }
+                      onPointerMove={(event) =>
+                        updateBoxSelection(event, activePlate)
+                      }
+                      onPointerUp={finishBoxSelection}
+                      onPointerCancel={cancelBoxSelection}
                       aria-label={tr(
                         `${activePlate.name} 孔板布局`,
                         `${activePlate.name} plate layout`,
                       )}
                     >
+                      {boxSelection?.active && (
+                        <span
+                          className="well-selection-box"
+                          aria-hidden="true"
+                          style={{
+                            left: Math.min(
+                              boxSelection.startX,
+                              boxSelection.currentX,
+                            ),
+                            top: Math.min(
+                              boxSelection.startY,
+                              boxSelection.currentY,
+                            ),
+                            width: Math.abs(
+                              boxSelection.currentX - boxSelection.startX,
+                            ),
+                            height: Math.abs(
+                              boxSelection.currentY - boxSelection.startY,
+                            ),
+                          }}
+                        />
+                      )}
                       <span className="grid-corner" aria-hidden="true" />
                       {Array.from({ length: activePlate.columns }).map(
                         (_, column) => (
@@ -3902,6 +4070,7 @@ export function QpcrPlanner() {
                                   style={wellVisual(well, targetGenes)}
                                   type="button"
                                   role="gridcell"
+                                  data-well-id={well.wellId}
                                   key={well.wellId}
                                   title={description}
                                   aria-label={description}

@@ -73,3 +73,12 @@ test("declares the conditional reaction calculator scroll region", async () => {
   );
   assert.match(source, /data-scroll-region="reaction-calculator"/);
 });
+
+test("declares the conditional plate box-selection affordance", async () => {
+  const source = await readFile(
+    new URL("../app/QpcrPlanner.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /拖动框选/);
+  assert.match(source, /className="well-selection-box"/);
+});

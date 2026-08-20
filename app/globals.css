@@ -2118,6 +2118,7 @@ select:focus-visible,
 
 .plate-grid {
   --well-size: 48px;
+  position: relative;
   display: grid;
   width: max-content;
   min-width: 100%;
@@ -2132,6 +2133,25 @@ select:focus-visible,
     inset 0 -10px 25px rgba(95, 92, 82, 0.035);
   grid-template-columns: 28px repeat(var(--plate-columns), var(--well-size));
   gap: 7px;
+}
+
+.plate-grid.is-box-selecting {
+  cursor: crosshair;
+  user-select: none;
+}
+
+.plate-grid.is-box-selecting .well:hover:not(:disabled) {
+  transform: none;
+}
+
+.well-selection-box {
+  position: absolute;
+  z-index: 8;
+  border: 1.5px solid rgba(86, 69, 200, 0.78);
+  border-radius: 8px;
+  background: rgba(109, 91, 208, 0.1);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.48);
+  pointer-events: none;
 }
 
 .plate-grid.plate-384 {

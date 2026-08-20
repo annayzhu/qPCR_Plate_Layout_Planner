@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  applyBoxSelection,
   assignSelectedWells,
   rectangularWellIds,
   translateSelectedWells,
@@ -25,6 +26,20 @@ test("Shift-style rectangular selection returns a complete well range", () => {
     "B1",
     "B2",
   ]);
+});
+
+test("plain box selection replaces the previous well selection", () => {
+  assert.deepEqual(
+    applyBoxSelection(["A1", "A2"], ["B1", "B2"], "replace"),
+    ["B1", "B2"],
+  );
+});
+
+test("Command or Ctrl box selection toggles every boxed well", () => {
+  assert.deepEqual(
+    applyBoxSelection(["A1", "A2"], ["A2", "B1"], "toggle"),
+    ["A1", "B1"],
+  );
 });
 
 test("editing one selected well does not update its replicate neighbours", () => {
