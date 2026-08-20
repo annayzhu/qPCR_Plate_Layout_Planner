@@ -376,6 +376,7 @@ export function ReactionCalculator({
   return (
     <aside
       className="reaction-calculator"
+      data-scroll-region="reaction-calculator"
       aria-label={copy.ariaLabel}
     >
       <div className="reaction-heading">

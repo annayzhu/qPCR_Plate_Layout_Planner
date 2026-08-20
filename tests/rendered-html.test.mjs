@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 async function render() {
@@ -47,6 +48,13 @@ test("server-renders the qPCR plate planner shell", async () => {
   assert.match(html, /横向优先/);
   assert.match(html, /生成布局/);
   assert.match(html, /重置工具/);
+  assert.match(html, /参数编辑/);
+  assert.match(html, /⌘\/Ctrl\+Z 撤销/);
+  assert.match(html, /列表可拖动排序/);
+  assert.match(html, /setup-history-bar/);
+  assert.match(html, /data-scroll-region="setup"/);
+  assert.match(html, /data-scroll-region="plate-preview"/);
+  assert.match(html, /aria-label="板布局工作区"/);
   assert.match(html, /导入 0 个样本名称/);
   assert.match(html, /导入 0 个基因名称/);
   assert.match(html, /样本数量（1–999）/);
@@ -56,4 +64,12 @@ test("server-renders the qPCR plate planner shell", async () => {
   assert.doesNotMatch(html, /Local-first/i);
   assert.doesNotMatch(html, /codex-preview/i);
   assert.doesNotMatch(html, /react-loading-skeleton/i);
+});
+
+test("declares the conditional reaction calculator scroll region", async () => {
+  const source = await readFile(
+    new URL("../app/ReactionCalculator.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /data-scroll-region="reaction-calculator"/);
 });

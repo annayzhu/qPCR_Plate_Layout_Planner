@@ -4,8 +4,11 @@ import {
   AlertTriangle,
   Beaker,
   Check,
+  ChevronDown,
+  ChevronUp,
   Download,
   FlaskConical,
+  GripVertical,
   Info,
   Languages,
   Layers3,
@@ -24,9 +27,11 @@ import {
 } from "lucide-react";
 import {
   type CSSProperties,
+  type DragEvent as ReactDragEvent,
   Fragment,
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
   useCallback,
   useEffect,
   useMemo,
@@ -38,6 +43,16 @@ import {
   type ExportContext,
   type ExportablePlate,
 } from "@/lib/exportExcel";
+import {
+  createEntryHistory,
+  moveEntryById,
+  moveEntryByOffset,
+  recordEntryState,
+  redoEntryState,
+  undoEntryState,
+  type EntryHistory,
+  type EntrySnapshot,
+} from "@/lib/entryHistory";
 import {
   calculateReactionRequirements,
   DEFAULT_REACTION_SYSTEM,
@@ -102,6 +117,118 @@ interface EditorState {
 interface ToastState {
   tone: "success" | "error" | "neutral";
   message: string;
+}
+
+type EntryKind = "sample" | "gene";
+
+interface DraggedEntry {
+  kind: EntryKind;
+  id: string;
+}
+
+interface SortableEntryRowProps {
+  entry: DraggedEntry;
+  name: string;
+  index: number;
+  count: number;
+  draggedEntry: DraggedEntry | null;
+  dropTarget: DraggedEntry | null;
+  dragLabel: string;
+  dragTitle: string;
+  moveUpLabel: string;
+  moveDownLabel: string;
+  onDragStart: (
+    entry: DraggedEntry,
+    event: ReactDragEvent<HTMLElement>,
+  ) => void;
+  onDragEnd: () => void;
+  onDragOver: (
+    entry: DraggedEntry,
+    event: ReactDragEvent<HTMLDivElement>,
+  ) => void;
+  onDrop: (
+    entry: DraggedEntry,
+    event: ReactDragEvent<HTMLDivElement>,
+  ) => void;
+  onMove: (entry: DraggedEntry, offset: number) => void;
+  children: ReactNode;
+}
+
+function SortableEntryRow({
+  entry,
+  name,
+  index,
+  count,
+  draggedEntry,
+  dropTarget,
+  dragLabel,
+  dragTitle,
+  moveUpLabel,
+  moveDownLabel,
+  onDragStart,
+  onDragEnd,
+  onDragOver,
+  onDrop,
+  onMove,
+  children,
+}: SortableEntryRowProps) {
+  const isDragging =
+    draggedEntry?.kind === entry.kind && draggedEntry.id === entry.id;
+  const isDropTarget =
+    dropTarget?.kind === entry.kind && dropTarget.id === entry.id;
+
+  return (
+    <div
+      className={`sample-row sortable-row ${
+        isDragging ? "is-dragging" : ""
+      } ${isDropTarget ? "is-drop-target" : ""}`}
+      onDragOver={(event) => onDragOver(entry, event)}
+      onDrop={(event) => onDrop(entry, event)}
+    >
+      <details className="entry-order-menu">
+        <summary
+          className="entry-drag-handle"
+          draggable
+          onDragStart={(event) => onDragStart(entry, event)}
+          onDragEnd={onDragEnd}
+          onKeyDown={(event) => {
+            if (!event.altKey) return;
+            if (event.key === "ArrowUp") {
+              event.preventDefault();
+              onMove(entry, -1);
+            }
+            if (event.key === "ArrowDown") {
+              event.preventDefault();
+              onMove(entry, 1);
+            }
+          }}
+          aria-label={dragLabel}
+          title={dragTitle}
+        >
+          <GripVertical size={15} />
+        </summary>
+        <div className="entry-order-popover" aria-label={name}>
+          <button
+            type="button"
+            disabled={index === 0}
+            onClick={() => onMove(entry, -1)}
+          >
+            <ChevronUp size={14} />
+            {moveUpLabel}
+          </button>
+          <button
+            type="button"
+            disabled={index === count - 1}
+            onClick={() => onMove(entry, 1)}
+          >
+            <ChevronDown size={14} />
+            {moveDownLabel}
+          </button>
+        </div>
+      </details>
+      {children}
+    </div>
+  );
 }
 
 interface StoredPlannerState {
@@ -398,6 +525,11 @@ export function QpcrPlanner() {
   const [plateType, setPlateType] = useState<PlateType>(96);
   const [samples, setSamples] = useState<SampleEntry[]>([]);
   const [genes, setGenes] = useState<GeneEntry[]>([]);
+  const [entryHistory, setEntryHistory] = useState(() =>
+    createEntryHistory<SampleEntry, GeneEntry>({ samples: [], genes: [] }),
+  );
+  const [draggedEntry, setDraggedEntry] = useState<DraggedEntry | null>(null);
+  const [dropTarget, setDropTarget] = useState<DraggedEntry | null>(null);
   const [language, setLanguage] = useState<Language>("zh");
   const [replicates, setReplicates] = useState(3);
   const [layoutPreset, setLayoutPreset] =
@@ -648,7 +780,6 @@ export function QpcrPlanner() {
     replicates,
     samples,
     sampleNames,
-    sampleNames.length,
     targetGenes.length,
     tr,
   ]);
@@ -712,6 +843,7 @@ export function QpcrPlanner() {
             setPlateType(parsed.plateType);
             setSamples(migratedSamples);
             setGenes(parsed.genes);
+            replaceEntryHistory(migratedSamples, parsed.genes);
             setReplicates(parsed.replicates);
             setLayoutPreset(migratedPreset);
             setLoadingPattern(migratedLoadingPattern);
@@ -755,6 +887,7 @@ export function QpcrPlanner() {
             setPlateType(parsed.plateType);
             setSamples(parsed.samples);
             setGenes(parsed.genes);
+            replaceEntryHistory(parsed.samples, parsed.genes);
             setReplicates(parsed.replicates);
             setLayoutPreset(migratedPreset);
             setLoadingPattern(migratedLoadingPattern);
@@ -798,6 +931,7 @@ export function QpcrPlanner() {
             setPlateType(parsed.plateType);
             setSamples(parsed.samples);
             setGenes(parsed.genes);
+            replaceEntryHistory(parsed.samples, parsed.genes);
             setReplicates(parsed.replicates);
             setLayoutPreset(parsed.layoutPreset);
             setLoadingPattern(migratedLoadingPattern);
@@ -849,6 +983,7 @@ export function QpcrPlanner() {
             setPlateType(parsed.plateType);
             setSamples(parsed.samples);
             setGenes(parsed.genes);
+            replaceEntryHistory(parsed.samples, parsed.genes);
             setReplicates(parsed.replicates);
             setLayoutPreset(parsed.layoutPreset);
             setLoadingPattern(restoredLoadingPattern);
@@ -897,6 +1032,7 @@ export function QpcrPlanner() {
             setPlateType(parsed.plateType);
             setSamples(parsed.samples);
             setGenes(parsed.genes);
+            replaceEntryHistory(parsed.samples, parsed.genes);
             setReplicates(parsed.replicates);
             setLayoutPreset(parsed.layoutPreset);
             setLoadingPattern(restoredLoadingPattern);
@@ -962,6 +1098,132 @@ export function QpcrPlanner() {
     setSavedAt("");
   }
 
+  function replaceEntryHistory(nextSamples: SampleEntry[], nextGenes: GeneEntry[]) {
+    setEntryHistory(
+      createEntryHistory({ samples: nextSamples, genes: nextGenes }),
+    );
+  }
+
+  function commitEntrySnapshot(
+    next: EntrySnapshot<SampleEntry, GeneEntry>,
+  ) {
+    const syncedHistory = {
+      ...entryHistory,
+      present: { samples: [...samples], genes: [...genes] },
+    };
+    setEntryHistory(recordEntryState(syncedHistory, next));
+    setSamples(next.samples);
+    setGenes(next.genes);
+    markChanged();
+  }
+
+  function transitionEntries(
+    transition: (
+      history: EntryHistory<SampleEntry, GeneEntry>,
+    ) => EntryHistory<SampleEntry, GeneEntry>,
+    message: string,
+  ) {
+    const syncedHistory = {
+      ...entryHistory,
+      present: { samples: [...samples], genes: [...genes] },
+    };
+    const next = transition(syncedHistory);
+    if (next === syncedHistory) return false;
+    setEntryHistory(next);
+    setSamples(next.present.samples);
+    setGenes(next.present.genes);
+    markChanged();
+    setToast({
+      tone: "neutral",
+      message,
+    });
+    return true;
+  }
+
+  function undoEntries() {
+    return transitionEntries(
+      undoEntryState,
+      tr("已撤销上一次参数编辑。", "Undid the last setup edit."),
+    );
+  }
+
+  function redoEntries() {
+    return transitionEntries(
+      redoEntryState,
+      tr("已重做参数编辑。", "Redid the setup edit."),
+    );
+  }
+
+  function reorderEntry(kind: EntryKind, activeId: string, targetId: string) {
+    if (activeId === targetId) return;
+    if (kind === "sample") {
+      const nextSamples = moveEntryById(samples, activeId, targetId);
+      if (nextSamples.every((entry, index) => entry.id === samples[index]?.id)) {
+        return;
+      }
+      commitEntrySnapshot({ samples: nextSamples, genes });
+    } else {
+      const nextGenes = moveEntryById(genes, activeId, targetId);
+      if (nextGenes.every((entry, index) => entry.id === genes[index]?.id)) {
+        return;
+      }
+      commitEntrySnapshot({ samples, genes: nextGenes });
+    }
+    setToast({
+      tone: "success",
+      message: tr("顺序已更新，重新生成后应用到板布局。", "Order updated; regenerate to apply it to the layout."),
+    });
+  }
+
+  function moveEntryWithKeyboard(
+    kind: EntryKind,
+    activeId: string,
+    offset: number,
+  ) {
+    const entries = kind === "sample" ? samples : genes;
+    const nextEntries = moveEntryByOffset(entries, activeId, offset);
+    const nextIndex = nextEntries.findIndex((entry) => entry.id === activeId);
+    const currentIndex = entries.findIndex((entry) => entry.id === activeId);
+    if (nextIndex === currentIndex || nextIndex < 0) return;
+    const displacedEntry = entries[nextIndex];
+    if (displacedEntry) reorderEntry(kind, activeId, displacedEntry.id);
+  }
+
+  function handleEntryDragStart(
+    entry: DraggedEntry,
+    event: ReactDragEvent<HTMLElement>,
+  ) {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", entry.id);
+    setDraggedEntry(entry);
+  }
+
+  function handleEntryDragOver(
+    target: DraggedEntry,
+    event: ReactDragEvent<HTMLDivElement>,
+  ) {
+    if (draggedEntry?.kind !== target.kind) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    setDropTarget(target);
+  }
+
+  function handleEntryDrop(
+    target: DraggedEntry,
+    event: ReactDragEvent<HTMLDivElement>,
+  ) {
+    event.preventDefault();
+    if (draggedEntry?.kind === target.kind) {
+      reorderEntry(target.kind, draggedEntry.id, target.id);
+    }
+    handleEntryDragEnd();
+  }
+
+  function handleEntryDragEnd() {
+    setDraggedEntry(null);
+    setDropTarget(null);
+  }
+
   function chooseLoadingPattern(nextPattern: LoadingPattern) {
     if (nextPattern === loadingPattern) return;
     setLoadingPattern(nextPattern);
@@ -1012,8 +1274,10 @@ export function QpcrPlanner() {
       });
     }
     if (additions.length > 0) {
-      setSamples((current) => [...current, ...additions]);
-      markChanged();
+      commitEntrySnapshot({
+        samples: [...samples, ...additions],
+        genes,
+      });
     }
     if (duplicates.length > 0) {
       setToast({
@@ -1058,8 +1322,10 @@ export function QpcrPlanner() {
       additions.push({ id: makeId("gene"), name: value, role });
     }
     if (additions.length > 0) {
-      setGenes((current) => [...current, ...additions]);
-      markChanged();
+      commitEntrySnapshot({
+        samples,
+        genes: [...genes, ...additions],
+      });
     }
     if (duplicates.length > 0) {
       setToast({
@@ -1140,6 +1406,7 @@ export function QpcrPlanner() {
     setSampleInputKind("sample");
     setSampleDraftOpen(false);
     setGenes(exampleGenes);
+    replaceEntryHistory(exampleSamples, exampleGenes);
     setGeneInput("");
     setGeneInputRole("target");
     setGeneDraftOpen(false);
@@ -1275,8 +1542,11 @@ export function QpcrPlanner() {
         return;
       }
       event.preventDefault();
-      if (event.shiftKey) redoLayout();
-      else undoLayout();
+      if (event.shiftKey) {
+        if (!redoEntries() && redoStack.length > 0) redoLayout();
+      } else if (!undoEntries() && undoStack.length > 0) {
+        undoLayout();
+      }
     };
     window.addEventListener("keydown", handleKeyboard);
     return () => window.removeEventListener("keydown", handleKeyboard);
@@ -1355,6 +1625,9 @@ export function QpcrPlanner() {
     setPlateType(96);
     setSamples([]);
     setGenes([]);
+    replaceEntryHistory([], []);
+    setDraggedEntry(null);
+    setDropTarget(null);
     setReplicates(3);
     setLayoutPreset("gene-major");
     setLoadingPattern("sequential");
@@ -1936,8 +2209,46 @@ export function QpcrPlanner() {
       <div className="workspace">
         <aside
           className="sidebar"
+          data-scroll-region="setup"
           aria-label={tr("实验设置", "Experiment setup")}
         >
+          <div
+            className="setup-history-bar"
+            role="toolbar"
+            aria-label={tr("参数编辑历史", "Setup edit history")}
+          >
+            <span>
+              {tr("参数编辑", "Setup edits")}
+              <small>
+                {tr(
+                  "⌘/Ctrl+Z 撤销 · 列表可拖动排序",
+                  "⌘/Ctrl+Z undo · Lists can be dragged to reorder",
+                )}
+              </small>
+            </span>
+            <div>
+              <button
+                className="icon-button"
+                type="button"
+                onClick={undoEntries}
+                disabled={!entryHistory.canUndo}
+                aria-label={tr("撤销参数编辑", "Undo setup edit")}
+                title={tr("撤销参数编辑", "Undo setup edit")}
+              >
+                <Undo2 size={14} />
+              </button>
+              <button
+                className="icon-button"
+                type="button"
+                onClick={redoEntries}
+                disabled={!entryHistory.canRedo}
+                aria-label={tr("重做参数编辑", "Redo setup edit")}
+                title={tr("重做参数编辑", "Redo setup edit")}
+              >
+                <Redo2 size={14} />
+              </button>
+            </div>
+          </div>
           <section className="panel">
             <div className="panel-heading">
               <div className="heading-with-index">
@@ -2019,12 +2330,11 @@ export function QpcrPlanner() {
                   className="button button-clear"
                   type="button"
                   onClick={() => {
-                    setSamples([]);
+                    commitEntrySnapshot({ samples: [], genes });
                     setSampleInput("");
                     setSampleInputKind("sample");
                     setSampleDraftOpen(false);
                     setSampleQuickCount("");
-                    markChanged();
                   }}
                 >
                   {tr("清空", "Clear")}
@@ -2092,8 +2402,40 @@ export function QpcrPlanner() {
                   className="sample-list"
                   aria-label={tr("已添加样本", "Added samples")}
                 >
-                  {samples.map((sample) => (
-                    <div className="sample-row" key={sample.id}>
+                  <p className="entry-order-help">
+                    <GripVertical size={12} />
+                    {tr(
+                      "拖动排序，点按手柄可上移/下移；⌘/Ctrl+Z 撤销",
+                      "Drag to reorder, or tap the handle for move controls; ⌘/Ctrl+Z to undo",
+                    )}
+                  </p>
+                  {samples.map((sample, index) => (
+                    <SortableEntryRow
+                      key={sample.id}
+                      entry={{ kind: "sample", id: sample.id }}
+                      name={sample.name}
+                      index={index}
+                      count={samples.length}
+                      draggedEntry={draggedEntry}
+                      dropTarget={dropTarget}
+                      dragLabel={tr(
+                        `拖动调整样本 ${sample.name || "当前行"} 顺序；点击可选择上移或下移`,
+                        `Drag to reorder sample ${sample.name || "this row"}; click for move up or move down controls`,
+                      )}
+                      dragTitle={tr(
+                        "拖动排序，或点击选择上移/下移",
+                        "Drag to reorder, or click for move controls",
+                      )}
+                      moveUpLabel={tr("上移", "Move up")}
+                      moveDownLabel={tr("下移", "Move down")}
+                      onDragStart={handleEntryDragStart}
+                      onDragEnd={handleEntryDragEnd}
+                      onDragOver={handleEntryDragOver}
+                      onDrop={handleEntryDrop}
+                      onMove={(entry, offset) =>
+                        moveEntryWithKeyboard(entry.kind, entry.id, offset)
+                      }
+                    >
                       <input
                         className="sample-name-input"
                         value={sample.name}
@@ -2131,8 +2473,8 @@ export function QpcrPlanner() {
                         }`}
                         type="button"
                         onClick={() => {
-                          setSamples((current) =>
-                            current.map((item) =>
+                          commitEntrySnapshot({
+                            samples: samples.map((item) =>
                               item.id === sample.id
                                 ? {
                                     ...item,
@@ -2143,8 +2485,8 @@ export function QpcrPlanner() {
                                   }
                                 : item,
                             ),
-                          );
-                          markChanged();
+                            genes,
+                          });
                         }}
                         aria-pressed={sample.kind === "blank"}
                         aria-label={tr(
@@ -2164,10 +2506,12 @@ export function QpcrPlanner() {
                         className="sample-delete-button"
                         type="button"
                         onClick={() => {
-                          setSamples((current) =>
-                            current.filter((item) => item.id !== sample.id),
-                          );
-                          markChanged();
+                          commitEntrySnapshot({
+                            samples: samples.filter(
+                              (item) => item.id !== sample.id,
+                            ),
+                            genes,
+                          });
                         }}
                         aria-label={tr(
                           `删除样本 ${sample.name}`,
@@ -2176,7 +2520,7 @@ export function QpcrPlanner() {
                       >
                         <Trash2 size={15} />
                       </button>
-                    </div>
+                    </SortableEntryRow>
                   ))}
                 </div>
               )}
@@ -2279,12 +2623,11 @@ export function QpcrPlanner() {
                   className="button button-clear"
                   type="button"
                   onClick={() => {
-                    setGenes([]);
+                    commitEntrySnapshot({ samples, genes: [] });
                     setGeneInput("");
                     setGeneInputRole("target");
                     setGeneDraftOpen(false);
                     setGeneQuickCount("");
-                    markChanged();
                   }}
                 >
                   {tr("清空", "Clear")}
@@ -2352,8 +2695,40 @@ export function QpcrPlanner() {
                   className="gene-list"
                   aria-label={tr("已添加基因", "Added assays")}
                 >
-                  {genes.map((gene) => (
-                    <div className="sample-row" key={gene.id}>
+                  <p className="entry-order-help">
+                    <GripVertical size={12} />
+                    {tr(
+                      "拖动排序，点按手柄可上移/下移；⌘/Ctrl+Z 撤销",
+                      "Drag to reorder, or tap the handle for move controls; ⌘/Ctrl+Z to undo",
+                    )}
+                  </p>
+                  {genes.map((gene, index) => (
+                    <SortableEntryRow
+                      key={gene.id}
+                      entry={{ kind: "gene", id: gene.id }}
+                      name={gene.name}
+                      index={index}
+                      count={genes.length}
+                      draggedEntry={draggedEntry}
+                      dropTarget={dropTarget}
+                      dragLabel={tr(
+                        `拖动调整基因 ${gene.name || "当前行"} 顺序；点击可选择上移或下移`,
+                        `Drag to reorder assay ${gene.name || "this row"}; click for move up or move down controls`,
+                      )}
+                      dragTitle={tr(
+                        "拖动排序，或点击选择上移/下移",
+                        "Drag to reorder, or click for move controls",
+                      )}
+                      moveUpLabel={tr("上移", "Move up")}
+                      moveDownLabel={tr("下移", "Move down")}
+                      onDragStart={handleEntryDragStart}
+                      onDragEnd={handleEntryDragEnd}
+                      onDragOver={handleEntryDragOver}
+                      onDrop={handleEntryDrop}
+                      onMove={(entry, offset) =>
+                        moveEntryWithKeyboard(entry.kind, entry.id, offset)
+                      }
+                    >
                       <input
                         className="sample-name-input"
                         value={gene.name}
@@ -2391,8 +2766,9 @@ export function QpcrPlanner() {
                         }`}
                         type="button"
                         onClick={() => {
-                          setGenes((current) =>
-                            current.map((item) =>
+                          commitEntrySnapshot({
+                            samples,
+                            genes: genes.map((item) =>
                               item.id === gene.id
                                 ? {
                                     ...item,
@@ -2403,8 +2779,7 @@ export function QpcrPlanner() {
                                   }
                                 : item,
                             ),
-                          );
-                          markChanged();
+                          });
                         }}
                         aria-pressed={gene.role === "reference"}
                         aria-label={tr(
@@ -2424,10 +2799,10 @@ export function QpcrPlanner() {
                         className="sample-delete-button"
                         type="button"
                         onClick={() => {
-                          setGenes((current) =>
-                            current.filter((item) => item.id !== gene.id),
-                          );
-                          markChanged();
+                          commitEntrySnapshot({
+                            samples,
+                            genes: genes.filter((item) => item.id !== gene.id),
+                          });
                         }}
                         aria-label={tr(
                           `删除基因 ${gene.name}`,
@@ -2436,7 +2811,7 @@ export function QpcrPlanner() {
                       >
                         <Trash2 size={15} />
                       </button>
-                    </div>
+                    </SortableEntryRow>
                   ))}
                 </div>
               )}
@@ -2843,7 +3218,11 @@ export function QpcrPlanner() {
           </section>
         </aside>
 
-        <main className="main-area">
+        <main
+          className="main-area"
+          data-scroll-region="plate-preview"
+          aria-label={tr("板布局工作区", "Plate layout workspace")}
+        >
           <section className="hero-strip" aria-labelledby="planner-title">
             <div>
               <p className="eyebrow">
